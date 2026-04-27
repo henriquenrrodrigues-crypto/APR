@@ -1617,9 +1617,15 @@ export default function App() {
     }
   };
 
-  // Auth Listener
+  // Auth Listener with timeout fallback
   useEffect(() => {
+    // Timeout fallback in case Firebase auth never responds
+    const timeout = setTimeout(() => {
+      setIsAuthReady(true);
+    }, 5000);
+    
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      clearTimeout(timeout);
       setUser(user);
       if (user) {
         try {
@@ -1656,7 +1662,10 @@ export default function App() {
       }
       setIsAuthReady(true);
     });
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(timeout);
+      unsubscribe();
+    };
   }, []);
 
   // Firestore Listeners
@@ -2277,11 +2286,10 @@ export default function App() {
 
   if (!isAuthReady) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a2233]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-white font-bold animate-pulse">Carregando APR PRO...</p>
-        </div>
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1a2233', flexDirection: 'column', gap: '16px' }}>
+        <div style={{ width: '48px', height: '48px', border: '4px solid #eab308', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
+        <p style={{ color: 'white', fontWeight: 'bold' }}>Carregando APR PRO...</p>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       </div>
     );
   }
