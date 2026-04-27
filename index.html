@@ -11,7 +11,13 @@
     <title>APR PRO - Segurança do Trabalho</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background-color: #1a2233; flex-direction: column; gap: 16px;">
+        <div style="width: 48px; height: 48px; border: 4px solid #eab308; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+        <p style="color: white; font-weight: bold;">Carregando APR PRO...</p>
+        <style>@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
