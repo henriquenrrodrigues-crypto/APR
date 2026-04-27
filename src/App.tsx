@@ -1671,6 +1671,12 @@ export default function App() {
   // Firestore Listeners
   useEffect(() => {
     if (!isAuthReady || !user) return;
+    
+    // Skip Firestore listeners in demo mode
+    if (user.uid === 'demo-user-123') {
+      console.log('Demo mode: skipping Firestore listeners');
+      return;
+    }
 
     const qAprs = query(collection(db, 'aprs'), orderBy('createdAt', 'desc'), limit(100));
     const unsubAprs = onSnapshot(qAprs, (snapshot) => {
@@ -1742,12 +1748,27 @@ export default function App() {
     }
   }, [saveError]);
 
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState(false);
+
   const handleLogin = async () => {
+    setLoginError(null);
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login failed", error);
+      const errorMessage = error?.message || 'Erro ao fazer login';
+      if (errorMessage.includes('invalid') || errorMessage.includes('unauthorized') || errorMessage.includes('popup-closed')) {
+        setLoginError('O dominio atual nao esta autorizado no Firebase. Configure o dominio no Firebase Console ou use o modo demo.');
+      } else {
+        setLoginError(errorMessage);
+      }
     }
+  };
+
+  const handleDemoLogin = () => {
+    setIsDemoMode(true);
+    setUser({ email: 'demo@aprpro.com', displayName: 'Usuario Demo', uid: 'demo-user-123' });
   };
 
   const handleLogout = async () => {
@@ -2312,16 +2333,39 @@ export default function App() {
             </div>
           </div>
 
-          <div className="space-y-4">
-            <p className="text-gray-600 text-sm">Acesse sua conta para gerenciar APRs e estatísticas de segurança.</p>
-            <button 
-              onClick={handleLogin}
-              className="w-full flex items-center justify-center gap-3 bg-white border-2 border-gray-200 text-gray-700 py-4 rounded-2xl font-bold hover:bg-gray-50 transition-all shadow-sm active:scale-95"
-            >
-              <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" referrerPolicy="no-referrer" />
-              Entrar com Google
-            </button>
-          </div>
+<div className="space-y-4">
+  <p className="text-gray-600 text-sm">Acesse sua conta para gerenciar APRs e estatísticas de segurança.</p>
+  <button
+  onClick={handleLogin}
+  className="w-full flex items-center justify-center gap-3 bg-white border-2 border-gray-200 text-gray-700 py-4 rounded-2xl font-bold hover:bg-gray-50 transition-all shadow-sm active:scale-95"
+  >
+  <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" referrerPolicy="no-referrer" />
+  Entrar com Google
+  </button>
+  
+  {loginError && (
+    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-sm">
+      {loginError}
+    </div>
+  )}
+  
+  <div className="relative">
+    <div className="absolute inset-0 flex items-center">
+      <div className="w-full border-t border-gray-200"></div>
+    </div>
+    <div className="relative flex justify-center text-sm">
+      <span className="px-2 bg-gradient-to-b from-amber-50 to-orange-100 text-gray-500">ou</span>
+    </div>
+  </div>
+  
+  <button
+    onClick={handleDemoLogin}
+    className="w-full flex items-center justify-center gap-3 bg-amber-500 text-white py-4 rounded-2xl font-bold hover:bg-amber-600 transition-all shadow-sm active:scale-95"
+  >
+    Entrar em Modo Demo
+  </button>
+  <p className="text-gray-400 text-xs text-center">O modo demo permite testar o app sem autenticacao</p>
+  </div>
 
           <div className="text-[10px] text-gray-400 uppercase tracking-widest font-bold space-y-1">
             <p>© 2026 - Sistema desenvolvido</p>
