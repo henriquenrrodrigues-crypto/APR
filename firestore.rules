@@ -1,0 +1,174 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required) - User ID
+    //   - email: string (required) - User email
+    //   - role: string (required) - 'admin' or 'user'
+    //
+    // Collection: employees
+    // Document ID: {employeeId}
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //   - role: string (required)
+    //   - signature: string (required) - Base64 signature
+    //
+    // Collection: accidentRecords
+    // Document ID: {recordId}
+    // Fields:
+    //   - id: string (required)
+    //   - month: string (required) - YYYY-MM
+    //   - employeeCount: number (required)
+    //   - workingDays: number (required)
+    //   - hoursPerDay: number (required)
+    //   - accidentsWithLostTime: number (required)
+    //   - accidentsWithoutLostTime: number (required)
+    //   - fatalAccidents: number (required)
+    //   - daysLost: number (required)
+    //   - htt: number (required)
+    //   - frequencyRate: number (required)
+    //   - severityRate: number (required)
+    //
+    // Collection: aprs
+    // Document ID: {aprId}
+    // Fields:
+    //   - id: string (required)
+    //   - company: string (required)
+    //   - osNumber: string (optional)
+    //   - date: string (required) - YYYY-MM-DD
+    //   - location: string (required)
+    //   - task: string (required)
+    //   - risks: list (required) - List of Risk objects
+    //   - responsible: string (required)
+    //   - signature: string (required) - Base64 signature
+    //   - safetyTechnicians: list (optional) - List of Employee objects
+    //   - executors: list (optional) - List of Employee objects
+    //   - photos: list (optional) - List of Base64 strings
+    //   - createdAt: string (required) - ISO 8601
+    //   - uid: string (required) - Owner UID
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "henriquenr.rodrigues@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'email', 'role']) &&
+             data.uid is string &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['admin', 'user'];
+    }
+
+    function isValidEmployee(data) {
+      return hasRequiredFields(['id', 'name', 'role', 'signature']) &&
+             data.id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.role is string &&
+             data.signature is string;
+    }
+
+    function isValidAccidentRecord(data) {
+      return hasRequiredFields(['id', 'month', 'employeeCount', 'workingDays', 'hoursPerDay', 'accidentsWithLostTime', 'accidentsWithoutLostTime', 'fatalAccidents', 'daysLost', 'htt', 'frequencyRate', 'severityRate']) &&
+             data.id is string &&
+             data.month is string && data.month.matches("^\\d{4}-\\d{2}$") &&
+             data.employeeCount is number &&
+             data.workingDays is number &&
+             data.hoursPerDay is number &&
+             data.accidentsWithLostTime is number &&
+             data.accidentsWithoutLostTime is number &&
+             data.fatalAccidents is number &&
+             data.daysLost is number &&
+             data.htt is number &&
+             data.frequencyRate is number &&
+             data.severityRate is number;
+    }
+
+    function isValidAPR(data) {
+      return hasRequiredFields(['id', 'company', 'date', 'location', 'task', 'risks', 'responsible', 'signature', 'createdAt', 'uid']) &&
+             data.id is string &&
+             data.company is string && data.company.size() > 0 &&
+             data.date is string && data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+             data.location is string &&
+             data.task is string &&
+             data.risks is list &&
+             data.responsible is string &&
+             data.signature is string &&
+             data.createdAt is string &&
+             data.uid is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == resource.data.role || isAdmin());
+    }
+
+    match /employees/{employeeId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidEmployee(request.resource.data);
+      allow update: if isAuthenticated() && isValidEmployee(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /accidentRecords/{recordId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAccidentRecord(request.resource.data);
+      allow update: if isAuthenticated() && isValidAccidentRecord(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /aprs/{aprId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAPR(request.resource.data) && request.resource.data.uid == request.auth.uid;
+      allow update: if isAuthenticated() && isValidAPR(request.resource.data) && (resource.data.uid == request.auth.uid || isAdmin());
+      allow delete: if isAuthenticated() && (resource.data.uid == request.auth.uid || isAdmin());
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

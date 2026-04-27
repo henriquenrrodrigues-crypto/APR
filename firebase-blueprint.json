@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "Employee": {
+      "title": "Employee",
+      "description": "A worker registered in the system with their signature.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "signature": { "type": "string", "description": "Base64 signature image" }
+      },
+      "required": ["id", "name", "role", "signature"]
+    },
+    "AccidentRecord": {
+      "title": "AccidentRecord",
+      "description": "Monthly accident statistics and KPIs.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "month": { "type": "string", "format": "date", "description": "YYYY-MM" },
+        "employeeCount": { "type": "number" },
+        "workingDays": { "type": "number" },
+        "hoursPerDay": { "type": "number" },
+        "accidentsWithLostTime": { "type": "number" },
+        "accidentsWithoutLostTime": { "type": "number" },
+        "fatalAccidents": { "type": "number" },
+        "daysLost": { "type": "number" },
+        "htt": { "type": "number" },
+        "frequencyRate": { "type": "number" },
+        "severityRate": { "type": "number" }
+      },
+      "required": ["id", "month", "employeeCount", "workingDays", "hoursPerDay", "accidentsWithLostTime", "accidentsWithoutLostTime", "fatalAccidents", "daysLost", "htt", "frequencyRate", "severityRate"]
+    },
+    "Risk": {
+      "title": "Risk",
+      "description": "A specific risk identified in an APR.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "description": { "type": "string" },
+        "measures": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "description", "measures"]
+    },
+    "APR": {
+      "title": "APR",
+      "description": "Preliminary Risk Analysis document.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "company": { "type": "string" },
+        "osNumber": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "location": { "type": "string" },
+        "task": { "type": "string" },
+        "risks": { "type": "array", "items": { "$ref": "Risk" } },
+        "responsible": { "type": "string" },
+        "signature": { "type": "string" },
+        "safetyTechnicians": { "type": "array", "items": { "$ref": "Employee" } },
+        "executors": { "type": "array", "items": { "$ref": "Employee" } },
+        "photos": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "uid": { "type": "string", "description": "Owner of the APR" }
+      },
+      "required": ["id", "company", "date", "location", "task", "risks", "responsible", "signature", "createdAt", "uid"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and permissions.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Collection of registered employees."
+    },
+    "/accidentRecords/{recordId}": {
+      "schema": "AccidentRecord",
+      "description": "Collection of monthly accident statistics."
+    },
+    "/aprs/{aprId}": {
+      "schema": "APR",
+      "description": "Collection of Preliminary Risk Analysis documents."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles."
+    }
+  }
+}

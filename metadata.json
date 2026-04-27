@@ -1,0 +1,5 @@
+{
+  "name": "APR - Análise Preliminar de Risco",
+  "description": "Ferramenta profissional para criação e gestão de Análises Preliminares de Risco (APR), focada em segurança do trabalho.",
+  "requestFramePermissions": ["camera"]
+}
