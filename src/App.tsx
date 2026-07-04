@@ -45,7 +45,8 @@ import {
   ChevronRight,
   ChevronDown,
   Smartphone,
-  Check
+  Check,
+  Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -86,6 +87,171 @@ import { APR, Risk, Employee, AccidentRecord } from './types';
 import { COMMON_RISKS } from './constants';
 // @ts-ignore
 import html2pdf from 'html2pdf.js';
+
+// Patch window.getComputedStyle globally to prevent html2canvas oklch/oklab parsing crashes
+if (typeof window !== 'undefined') {
+  try {
+    const originalGetComputedStyle = window.getComputedStyle;
+    Object.defineProperty(window, 'getComputedStyle', {
+      value: function (elt: Element, pseudoElt?: string) {
+        const style = originalGetComputedStyle(elt, pseudoElt);
+        return new Proxy(style, {
+          get(target, prop, receiver) {
+            if (prop === 'getPropertyValue') {
+              return function (propertyName: string) {
+                const val = target.getPropertyValue(propertyName);
+                if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
+                  return val
+                    .replace(/oklch\([^)]+\)/g, 'rgb(113, 113, 122)')
+                    .replace(/oklab\([^)]+\)/g, 'rgb(113, 113, 122)');
+                }
+                return val;
+              };
+            }
+            
+            // Safe invariant check to prevent Proxy crashes on read-only/non-configurable properties
+            if (typeof prop === 'string' || typeof prop === 'symbol') {
+              try {
+                const desc = Object.getOwnPropertyDescriptor(target, prop);
+                if (desc && desc.configurable === false && desc.writable === false) {
+                  return target[prop as any];
+                }
+              } catch (e) {}
+            }
+
+            let val;
+            try {
+              val = Reflect.get(target, prop);
+            } catch (err) {
+              val = undefined;
+            }
+            if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
+              return val
+                .replace(/oklch\([^)]+\)/g, 'rgb(113, 113, 122)')
+                .replace(/oklab\([^)]+\)/g, 'rgb(113, 113, 122)');
+            }
+            if (typeof val === 'function') {
+              return val.bind(target);
+            }
+            return val;
+          }
+        });
+      },
+      configurable: true,
+      writable: true
+    });
+  } catch (e) {
+    console.warn('Error patching global getComputedStyle:', e);
+  }
+}
+
+const setupPDFCloneCompatibility = (clonedDoc: Document) => {
+  const win = clonedDoc.defaultView;
+  if (win) {
+    try {
+      const originalGetComputedStyle = win.getComputedStyle;
+      Object.defineProperty(win, 'getComputedStyle', {
+        value: function (elt: Element, pseudoElt?: string) {
+          const style = originalGetComputedStyle(elt, pseudoElt);
+          return new Proxy(style, {
+            get(target, prop, receiver) {
+              if (prop === 'getPropertyValue') {
+                return function(propertyName: string) {
+                  const val = target.getPropertyValue(propertyName);
+                  if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
+                    return val
+                      .replace(/oklch\([^)]+\)/g, 'rgb(113, 113, 122)')
+                      .replace(/oklab\([^)]+\)/g, 'rgb(113, 113, 122)');
+                  }
+                  return val;
+                };
+              }
+
+              // Safe invariant check to prevent Proxy crashes on read-only/non-configurable properties
+              if (typeof prop === 'string' || typeof prop === 'symbol') {
+                try {
+                  const desc = Object.getOwnPropertyDescriptor(target, prop);
+                  if (desc && desc.configurable === false && desc.writable === false) {
+                    return target[prop as any];
+                  }
+                } catch (e) {}
+              }
+
+              let val;
+              try {
+                val = Reflect.get(target, prop);
+              } catch (err) {
+                val = undefined;
+              }
+              if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab'))) {
+                return val
+                  .replace(/oklch\([^)]+\)/g, 'rgb(113, 113, 122)')
+                  .replace(/oklab\([^)]+\)/g, 'rgb(113, 113, 122)');
+              }
+              if (typeof val === 'function') {
+                return val.bind(target);
+              }
+              return val;
+            }
+          });
+        },
+        configurable: true,
+        writable: true
+      });
+    } catch (e) {
+      console.warn('Error patching getComputedStyle in cloned window:', e);
+    }
+  }
+
+  clonedDoc.querySelectorAll('style').forEach((styleTag) => {
+    try {
+      let css = styleTag.innerHTML;
+      if (css.includes('oklch') || css.includes('oklab')) {
+        css = css.replace(/oklch\([^)]+\)/g, '#71717a');
+        css = css.replace(/oklab\([^)]+\)/g, '#71717a');
+        styleTag.innerHTML = css;
+      }
+    } catch (e) {
+      console.warn('Error patching style tag in cloned document:', e);
+    }
+  });
+
+  clonedDoc.querySelectorAll('[style]').forEach((el) => {
+    try {
+      const styleAttr = el.getAttribute('style');
+      if (styleAttr && (styleAttr.includes('oklch') || styleAttr.includes('oklab'))) {
+        el.setAttribute('style', styleAttr
+          .replace(/oklch\([^)]+\)/g, '#71717a')
+          .replace(/oklab\([^)]+\)/g, '#71717a')
+        );
+      }
+    } catch (e) {
+      console.warn('Error patching inline style in cloned document:', e);
+    }
+  });
+
+  // Clean up any gaps, backgrounds, padding, margins, or shadows for the print view in PDF to ensure exact page alignment
+  const printView = clonedDoc.getElementById('apr-print-view');
+  if (printView) {
+    printView.style.backgroundColor = 'transparent';
+    printView.style.background = 'transparent';
+    printView.style.padding = '0';
+    printView.style.margin = '0';
+    printView.style.gap = '0';
+    printView.style.display = 'block';
+    
+    // Find all page children
+    const childPages = printView.children;
+    for (let i = 0; i < childPages.length; i++) {
+      const child = childPages[i] as HTMLElement;
+      if (child) {
+        child.style.boxShadow = 'none';
+        child.style.border = 'none';
+        child.style.margin = '0';
+      }
+    }
+  }
+};
 
 const formatDateForDisplay = (dateStr: string | undefined) => {
   if (!dateStr) return '';
@@ -134,75 +300,76 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 
   render() {
     if (this.state.hasError) {
-      let message = "Ocorreu um erro inesperado.";
-      let isQuota = false;
+      let errorMessage = "Ocorreu um erro inesperado.";
+      let isAuthError = false;
+      let isQuotaError = false;
       
       try {
-        const errObj = JSON.parse(this.state.error.message);
-        if (errObj.error) {
-          message = errObj.error;
-          isQuota = message.includes('Limite diário') || message.includes('Quota');
+        const parsed = JSON.parse(this.state.error.message);
+        if (parsed.error) {
+          errorMessage = parsed.error;
+          if (errorMessage.includes('auth/unauthorized-domain') || errorMessage.includes('dominio não está autorizado')) {
+            isAuthError = true;
+          }
+          if (errorMessage.includes('Limite diário') || errorMessage.includes('Quota exceeded')) {
+            isQuotaError = true;
+          }
+          if (parsed.path) {
+            errorMessage += ` (Caminho: ${parsed.path})`;
+          }
         }
       } catch (e) {
-        message = this.state.error.message || message;
+        errorMessage = this.state.error?.message || String(this.state.error);
       }
 
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
-          <div className="max-w-md w-full space-y-8">
-            {/* Ícone Animado de Manutenção */}
-            <div className="relative mx-auto w-24 h-24">
-              <div className="absolute inset-0 bg-blue-100 rounded-full animate-pulse"></div>
-              <div className="relative flex items-center justify-center w-full h-full text-blue-600">
-                <AlertTriangle size={48} />
-              </div>
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-xl border border-red-100 max-w-md w-full text-center space-y-6">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <AlertTriangle className="text-red-500 w-10 h-10" />
             </div>
-
-            <div className="space-y-3">
-              <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-tight">
-                Sistema está Fora do ar
-              </h1>
-              <p className="text-slate-600 text-lg font-medium">
-                {isQuota ? 'Manutenção Temporária (Aguardando Reset de Cota)' : 'Ops! Identificamos um problema técnico.'}
+            <div className="space-y-2">
+              <h1 className="text-2xl font-black text-gray-900">Ops! Limite de Uso Atingido</h1>
+              <p className="text-gray-600 leading-relaxed">
+                {isQuotaError 
+                  ? 'O Google atingiu o limite gratuito de leitura hoje. Para resolver isso permanentemente, é necessário habilitar o faturamento (billing) no Console do Firebase ou aguardar até amanhã para o limite resetar.' 
+                  : 'Encontramos um problema ao carregar o aplicativo.'}
               </p>
             </div>
-
-            <div className="bg-white p-6 rounded-3xl shadow-xl border border-slate-100 space-y-4">
-              <div className="flex items-start gap-4 text-left">
-                <div className="bg-amber-100 p-2 rounded-xl text-amber-600 shrink-0">
-                  <Clock size={20} />
+            
+            <div className="p-4 bg-red-50 rounded-2xl text-left border border-red-100">
+              <p className="text-xs font-bold text-red-800 uppercase mb-1 flex items-center gap-2">
+                <Shield size={14} /> Detalhes Técnicos
+              </p>
+              <p className="text-sm text-red-700 break-words">{errorMessage}</p>
+              {isQuotaError && (
+                <div className="mt-3 p-3 bg-white rounded-xl border border-red-100 text-xs text-red-900">
+                  <p className="font-bold mb-1">Para o Administrador:</p>
+                  <p>1. Acesse o <a href="https://console.firebase.google.com/" target="_blank" rel="noopener noreferrer" className="underline font-bold">Console do Firebase</a>.</p>
+                  <p>2. Selecione seu projeto.</p>
+                  <p>3. Clique em "Upgrade" (Plano Blaze) para remover limites gratuitos.</p>
                 </div>
-                <div>
-                  <h3 className="font-bold text-slate-800">Por que isso aconteceu?</h3>
-                  <p className="text-sm text-slate-500 leading-relaxed italic">
-                    "O Google (nosso servidor) impõe um limite diário de uso no plano gratuito. Como o app foi muito acessado hoje, precisamos aguardar o próximo ciclo de créditos para processar os dados."
-                  </p>
+              )}
+              {isAuthError && !isQuotaError && (
+                <div className="mt-3 p-3 bg-white rounded-xl border border-red-100 text-xs text-red-900">
+                  <p className="font-bold mb-1">Dica para o Administrador:</p>
+                  <p>Adicione este domínio em: Firebase Console &gt; Autenticação &gt; Configurações &gt; Domínios autorizados.</p>
                 </div>
-              </div>
-
-              <div className="pt-2 border-t border-slate-50">
-                <p className="text-xs text-slate-400">
-                  O sistema voltará ao normal automaticamente amanhã cedo. Suas APRs e dados estão seguros!
-                </p>
-              </div>
+              )}
             </div>
 
-            {!isQuota && (
-              <button 
-                onClick={() => window.location.reload()}
-                className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg active:scale-95"
-              >
-                Tentar Recarregar
-              </button>
-            )}
-            
-            <p className="text-slate-400 text-xs">
-              HC Soluções em Software • 2026
-            </p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full bg-gray-900 hover:bg-black text-white py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95"
+            >
+              Tentar Novamente
+            </button>
+            <p className="text-[10px] text-gray-400 font-medium">Se o faturamento já estiver ativo e o erro persistir, aguarde alguns minutos.</p>
           </div>
         </div>
       );
     }
+
     return this.props.children;
   }
 }
@@ -424,7 +591,7 @@ const DashboardLayout = ({
           </div>
         </header>
 
-        <main className="p-4 lg:p-8">
+        <main className="p-3 lg:p-6">
           {children}
         </main>
       </div>
@@ -723,7 +890,9 @@ const StatisticsPage = ({
   const handleSaveRecord = () => {
     const htt = employeeCount * workingDays * hoursPerDay;
     const frequencyRate = htt > 0 ? ((accidentsWithLostTime + fatalAccidents) * 1000000) / htt : 0;
-    const severityRate = htt > 0 ? (daysLost * 1000000) / htt : 0;
+    // NBR 14280: Fatal accidents count as 6000 debited days
+    const totalDaysForSeverity = daysLost + (fatalAccidents * 6000);
+    const severityRate = htt > 0 ? (totalDaysForSeverity * 1000000) / htt : 0;
 
     const record: AccidentRecord = {
       id: editingRecordId || generateId(),
@@ -780,6 +949,17 @@ const StatisticsPage = ({
 
   return (
     <div className="space-y-8">
+      <div className="bg-purple-50 border border-purple-100 p-4 rounded-2xl flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-purple-600 rounded-xl flex items-center justify-center">
+            <FileText className="text-white" size={20} />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-purple-400 uppercase tracking-wider">Número do Contrato</p>
+            <p className="text-lg font-black text-purple-900">4500083171</p>
+          </div>
+        </div>
+      </div>
       {/* Dashboard Cards - Matching Image */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-[#3B82F6] p-6 rounded-xl shadow-lg relative overflow-hidden group">
@@ -919,10 +1099,10 @@ const StatisticsPage = ({
           <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm space-y-6">
             <h3 className="text-lg font-bold border-b border-gray-100 pb-2">Lançamento Mensal</h3>
             <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-gray-500 uppercase">Mês/Ano Referência</label>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2">
                     <button 
                       onClick={() => changeMonth(-1)}
                       className="p-3 shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl transition-colors"
@@ -930,15 +1110,22 @@ const StatisticsPage = ({
                     >
                       <ChevronLeft size={20} />
                     </button>
-                    <input 
-                      type="month" 
-                      value={month}
-                      onChange={(e) => setMonth(e.target.value)}
-                      className="flex-1 min-w-0 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-base focus:ring-2 focus:ring-purple-500/20 outline-none"
-                    />
+                    <div className="relative flex-1 h-[48px]">
+                      <div className="absolute inset-0 flex items-center justify-center bg-gray-50 border border-gray-200 rounded-xl pointer-events-none">
+                        <span className="text-sm font-bold text-gray-900 uppercase">
+                          {getMonthName(month, { month: 'short', year: 'numeric' })}
+                        </span>
+                      </div>
+                      <input 
+                        type="month" 
+                        value={month}
+                        onChange={(e) => setMonth(e.target.value)}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      />
+                    </div>
                     <button 
                       onClick={() => changeMonth(1)}
-                      className="p-3 shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
+                      className="p-3 shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl transition-colors"
                       title="Próximo Mês"
                     >
                       <ChevronRight size={20} />
@@ -1035,8 +1222,9 @@ const StatisticsPage = ({
                 <button 
                   onClick={() => {
                     const htt = employeeCount * workingDays * hoursPerDay;
-                    const frequencyRate = htt > 0 ? (accidentsWithLostTime * 1000000) / htt : 0;
-                    const severityRate = htt > 0 ? (daysLost * 1000000) / htt : 0;
+                    const frequencyRate = htt > 0 ? ((accidentsWithLostTime + fatalAccidents) * 1000000) / htt : 0;
+                    const totalDaysForSeverity = daysLost + (fatalAccidents * 6000);
+                    const severityRate = htt > 0 ? (totalDaysForSeverity * 1000000) / htt : 0;
                     handleViewReport({
                       id: 'preview',
                       month,
@@ -1079,15 +1267,15 @@ const StatisticsPage = ({
             <div className="p-6 border-b border-gray-100">
               <h3 className="text-lg font-bold">Histórico de Lançamentos</h3>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
+            <div className="overflow-x-auto no-scrollbar">
+              <table className="w-full text-left table-fixed">
                 <thead>
                   <tr className="bg-gray-50/50">
-                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Mês</th>
+                    <th className="w-1/3 px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Mês</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">HTT</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">CPT/SPT</th>
                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">TF</th>
-                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Ações</th>
+                    <th className="w-24 px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -1170,7 +1358,7 @@ const APRMonthlyReport = ({ aprs, setView, reportMonth, setReportMonth }: {
   reportMonth: string;
   setReportMonth: (month: string) => void;
 }) => {
-  const filteredAprs = useMemo(() => (aprs || []).filter(apr => apr.date.startsWith(reportMonth)), [aprs, reportMonth]);
+  const filteredAprs = useMemo(() => (aprs || []).filter(apr => apr && apr.date && typeof apr.date === 'string' && apr.date.startsWith(reportMonth)), [aprs, reportMonth]);
   
   const totalRisksCount = useMemo(() => filteredAprs.reduce((acc, apr) => acc + (apr.risks || []).length, 0), [filteredAprs]);
   const totalMeasuresCount = useMemo(() => filteredAprs.reduce((acc, apr) => acc + (apr.risks || []).reduce((sum, r) => sum + (r.measures || []).length, 0), 0), [filteredAprs]);
@@ -1179,7 +1367,11 @@ const APRMonthlyReport = ({ aprs, setView, reportMonth, setReportMonth }: {
     if (filteredAprs.length === 0) return [];
     const counts: Record<string, number> = {};
     filteredAprs.forEach(apr => {
-      const uniqueRisksInApr = new Set<string>((apr.risks || []).map(r => r.description.trim()));
+      const uniqueRisksInApr = new Set<string>(
+        (apr.risks || [])
+          .map(r => r && typeof r.description === 'string' ? r.description.trim() : '')
+          .filter(Boolean)
+      );
       uniqueRisksInApr.forEach(risk => {
         if (risk) counts[risk] = (counts[risk] || 0) + 1;
       });
@@ -1194,7 +1386,12 @@ const APRMonthlyReport = ({ aprs, setView, reportMonth, setReportMonth }: {
     if (filteredAprs.length === 0) return [];
     const counts: Record<string, number> = {};
     filteredAprs.forEach(apr => {
-      const uniqueMeasuresInApr = new Set<string>((apr.risks || []).flatMap(r => (r.measures || []).map(m => m.trim())));
+      const uniqueMeasuresInApr = new Set<string>(
+        (apr.risks || [])
+          .flatMap(r => (r && r.measures ? r.measures : []))
+          .map(m => typeof m === 'string' ? m.trim() : '')
+          .filter(Boolean)
+      );
       uniqueMeasuresInApr.forEach(measure => {
         if (measure) counts[measure] = (counts[measure] || 0) + 1;
       });
@@ -1214,11 +1411,17 @@ const APRMonthlyReport = ({ aprs, setView, reportMonth, setReportMonth }: {
     if (!element) return;
     
     const opt = {
-      margin: 10,
+      margin: [15, 15, 15, 15],
       filename: `Relatorio_APR_${reportMonth}.pdf`,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      html2canvas: { 
+        scale: 2, 
+        useCORS: true, 
+        logging: false,
+        onclone: setupPDFCloneCompatibility
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: ['.page-break-avoid', 'tr'] }
     };
     
     // @ts-ignore
@@ -1226,181 +1429,257 @@ const APRMonthlyReport = ({ aprs, setView, reportMonth, setReportMonth }: {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="flex items-center justify-between no-print">
+    <div className="min-h-screen bg-gray-50 py-4 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto space-y-4">
+        <div className="flex items-center justify-between no-print mb-1">
           <button 
             onClick={() => setView('list')}
-            className="flex items-center gap-2 text-gray-500 hover:text-gray-700 font-medium"
+            className="flex items-center gap-2 text-gray-500 hover:text-gray-700 font-medium text-sm"
           >
-            <ArrowLeft size={20} /> Voltar para Lista
+            <ArrowLeft size={16} /> Voltar para Lista
           </button>
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <button 
               onClick={handlePrintReport}
-              className="flex items-center gap-2 bg-white border border-gray-200 px-4 py-2 rounded-xl font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
+              className="flex items-center gap-1.5 bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-xs font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
             >
-              <Printer size={18} /> Imprimir
+              <Printer size={14} /> Imprimir
             </button>
             <button 
               onClick={handleExportPDF}
-              className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-xl font-bold hover:bg-purple-700 transition-all shadow-md"
+              className="flex items-center gap-1.5 bg-purple-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-purple-700 transition-all shadow-md"
             >
-              <Download size={18} /> Exportar PDF
+              <Download size={14} /> Exportar PDF
             </button>
           </div>
         </div>
 
-        <div id="apr-monthly-report-content" className="bg-white p-6 sm:p-12 rounded-2xl shadow-xl border border-gray-100">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b-2 border-gray-900 pb-6 mb-8 gap-4">
-            <div className="flex items-center gap-4">
-              <div className="p-3 rounded-2xl" style={{ backgroundColor: '#eab308' }}>
-                <ClipboardList className="text-white w-8 h-8" />
+        <div id="apr-monthly-report-content" className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-900 pb-3 mb-4 gap-3">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl shrink-0" style={{ backgroundColor: '#eab308' }}>
+                <ClipboardList className="text-white w-6 h-6" />
               </div>
               <div>
-                <h1 className="text-2xl font-black uppercase tracking-tighter">Relatório Consolidado</h1>
-                <p className="text-gray-500 font-medium">Análise de riscos e estatísticas de acidentes</p>
+                <h1 className="text-xl font-black uppercase tracking-tight">Relatório Consolidado</h1>
+                <p className="text-[11px] text-gray-400 font-bold leading-none">Análise de riscos e estatísticas de acidentes</p>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-sm font-bold text-gray-400 uppercase">Período</p>
-              <p className="text-xl font-black text-gray-900">
+            
+            {/* Contrato centralizado */}
+            <div className="flex flex-col items-center justify-center bg-gray-50 px-3 py-1 rounded-lg border border-gray-200/60 text-center sm:mx-auto">
+              <span className="text-[8px] font-bold text-gray-400 uppercase tracking-widest leading-none mb-0.5">Contrato</span>
+              <span className="text-xs font-black text-gray-900 tracking-wider leading-none">4500083171</span>
+            </div>
+
+            <div className="text-right shrink-0">
+              <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">Período</p>
+              <p className="text-base font-black text-gray-900 leading-tight">
                 {getMonthName(reportMonth).toUpperCase()}
               </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-10">
-            <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm text-center">
-              <p className="text-xs font-bold text-gray-400 uppercase mb-1">Total de APRs</p>
-              <p className="text-3xl font-black text-gray-900">{filteredAprs.length}</p>
-              <p className="text-[10px] text-gray-400 mt-1">Análises cadastradas</p>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="bg-white p-2.5 py-3 rounded-xl border border-gray-150 shadow-sm text-center">
+              <p className="text-[9px] font-bold text-gray-400 uppercase mb-0.5">Total de APRs</p>
+              <p className="text-xl font-black text-gray-900 leading-none">{filteredAprs.length}</p>
+              <p className="text-[8px] text-gray-400 mt-0.5">Análises cadastradas</p>
             </div>
-            <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm text-center">
-              <p className="text-xs font-bold text-gray-400 uppercase mb-1">Riscos Identificados</p>
-              <p className="text-3xl font-black" style={{ color: '#ca8a04' }}>{totalRisksCount}</p>
-              <p className="text-[10px] text-gray-400 mt-1">Total de incidências</p>
+            <div className="bg-white p-2.5 py-3 rounded-xl border border-gray-150 shadow-sm text-center">
+              <p className="text-[9px] font-bold text-gray-400 uppercase mb-0.5">Riscos Identificados</p>
+              <p className="text-xl font-black leading-none" style={{ color: '#ca8a04' }}>{totalRisksCount}</p>
+              <p className="text-[8px] text-gray-400 mt-0.5">Total de incidências</p>
             </div>
-            <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm text-center">
-              <p className="text-xs font-bold text-gray-400 uppercase mb-1">Medidas Aplicadas</p>
-              <p className="text-3xl font-black" style={{ color: '#16a34a' }}>{totalMeasuresCount}</p>
-              <p className="text-[10px] text-gray-400 mt-1">Total de aplicações</p>
+            <div className="bg-white p-2.5 py-3 rounded-xl border border-gray-150 shadow-sm text-center">
+              <p className="text-[9px] font-bold text-gray-400 uppercase mb-0.5">Medidas Aplicadas</p>
+              <p className="text-xl font-black leading-none" style={{ color: '#16a34a' }}>{totalMeasuresCount}</p>
+              <p className="text-[8px] text-gray-400 mt-0.5">Total de aplicações</p>
             </div>
           </div>
 
-          <div className="space-y-10">
-            {/* Top Risks Section */}
-            <div className="rounded-2xl border overflow-hidden" style={{ backgroundColor: '#fff5f5', borderColor: '#fee2e2' }}>
-              <div className="p-4 border-b flex items-center gap-2" style={{ backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}>
-                <AlertTriangle size={18} style={{ color: '#ef4444' }} />
-                <h2 className="text-sm font-black uppercase" style={{ color: '#7f1d1d' }}>Top 5 Riscos Mais Comuns</h2>
-              </div>
-              <div className="p-6 space-y-4">
-                {riskStats.map((risk, i) => (
-                  <div key={i} className="flex items-center gap-4">
-                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
-                      {i + 1}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-end mb-1">
-                        <span className="text-xs font-bold text-gray-700">{risk.name}</span>
-                        <span className="text-[10px] font-black text-gray-900">{risk.count} ({risk.percentage}%)</span>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Top Risks Section */}
+              <div className="rounded-xl border page-break-avoid" style={{ backgroundColor: '#fff5f5', borderColor: '#fee2e2', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                <div className="p-2.5 border-b flex items-center gap-2" style={{ backgroundColor: '#fef2f2', borderColor: '#fee2e2' }}>
+                  <AlertTriangle size={14} style={{ color: '#ef4444' }} />
+                  <h2 className="text-xs font-black uppercase" style={{ color: '#7f1d1d' }}>Top 5 Riscos Mais Comuns</h2>
+                </div>
+                <div className="p-3 space-y-3">
+                  {riskStats.map((risk, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black shrink-0" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>
+                        {i + 1}
                       </div>
-                      <div className="w-full h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#f3f4f6' }}>
-                        <div 
-                          className="h-full rounded-full" 
-                          style={{ width: `${risk.percentage}%`, backgroundColor: '#ef4444' }}
-                        ></div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {riskStats.length === 0 && (
-                  <p className="text-center text-xs text-gray-400 italic py-4">Nenhum dado de risco disponível.</p>
-                )}
-              </div>
-            </div>
-
-            {/* Top Measures Section */}
-            <div className="rounded-2xl border overflow-hidden" style={{ backgroundColor: '#f0fdf4', borderColor: '#dcfce7' }}>
-              <div className="p-4 border-b flex items-center gap-2" style={{ backgroundColor: '#f0fdf4', borderColor: '#dcfce7' }}>
-                <Shield size={18} style={{ color: '#22c55e' }} />
-                <h2 className="text-sm font-black uppercase" style={{ color: '#14532d' }}>As 5 principais medidas de controle mais utilizadas</h2>
-              </div>
-              <div className="p-6 space-y-4">
-                {measureStats.map((measure, i) => (
-                  <div key={i} className="flex items-center gap-4">
-                    <div className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ backgroundColor: '#dcfce7', color: '#16a34a' }}>
-                      {i + 1}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-end mb-1">
-                        <span className="text-xs font-bold text-gray-700">{measure.name}</span>
-                        <span className="text-[10px] font-black text-gray-900">{measure.count} ({measure.percentage}%)</span>
-                      </div>
-                      <div className="w-full h-2 rounded-full overflow-hidden" style={{ backgroundColor: '#f3f4f6' }}>
-                        <div 
-                          className="h-full rounded-full" 
-                          style={{ width: `${measure.percentage}%`, backgroundColor: '#22c55e' }}
-                        ></div>
+                      <div className="flex-1">
+                        <div className="flex justify-between items-baseline mb-1">
+                          <span className="text-[11px] font-bold text-gray-700 leading-tight">{risk.name}</span>
+                          <span className="text-[9px] font-black text-gray-900 leading-none shrink-0 ml-2">{risk.count} ({risk.percentage}%)</span>
+                        </div>
+                        <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: '#f3f4f6' }}>
+                          <div 
+                            className="h-full rounded-full" 
+                            style={{ width: `${risk.percentage}%`, backgroundColor: '#ef4444' }}
+                          ></div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-                {measureStats.length === 0 && (
-                  <p className="text-center text-xs text-gray-400 italic py-4">Nenhuma medida de controle disponível.</p>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <h2 className="text-lg font-black uppercase border-l-4 border-yellow-500 pl-4">Detalhamento das Atividades</h2>
-            <div className="overflow-x-auto border border-gray-200 rounded-2xl">
-              <table className="w-full text-left min-w-[600px]">
-                <thead>
-                  <tr className="text-white" style={{ backgroundColor: '#111827' }}>
-                    <th className="px-6 py-4 text-xs font-bold uppercase">Data</th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase">OS</th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase">Atividade</th>
-                    <th className="px-6 py-4 text-xs font-bold uppercase">Riscos</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredAprs.map(apr => (
-                    <tr key={apr.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 text-sm font-bold">
-                        {formatDateForDisplay(apr.date)}
-                      </td>
-                      <td className="px-6 py-4 text-sm font-mono">{apr.osNumber}</td>
-                      <td className="px-6 py-4 text-sm font-medium">{apr.task}</td>
-                      <td className="px-6 py-4 text-sm">
-                        <span className="px-2 py-1 rounded-lg font-bold" style={{ backgroundColor: '#fef9c3', color: '#854d0e' }}>
-                          {(apr.risks || []).length}
-                        </span>
-                      </td>
-                    </tr>
                   ))}
-                  {filteredAprs.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-6 py-12 text-center text-gray-400 italic">
-                        Nenhuma atividade registrada para este período.
-                      </td>
-                    </tr>
+                  {riskStats.length === 0 && (
+                    <p className="text-center text-xs text-gray-400 italic py-2">Nenhum dado de risco disponível.</p>
                   )}
-                </tbody>
-              </table>
+                </div>
+              </div>
+
+              {/* Top Measures Section */}
+              <div className="rounded-xl border page-break-avoid" style={{ backgroundColor: '#f0fdf4', borderColor: '#dcfce7', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                <div className="p-2.5 border-b flex items-center gap-2" style={{ backgroundColor: '#f0fdf4', borderColor: '#dcfce7' }}>
+                  <Shield size={14} style={{ color: '#22c55e' }} />
+                  <h2 className="text-xs font-black uppercase" style={{ color: '#14532d' }}>As 5 principais medidas de controle</h2>
+                </div>
+                <div className="p-3 space-y-3">
+                  {measureStats.map((measure, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black shrink-0" style={{ backgroundColor: '#dcfce7', color: '#16a34a' }}>
+                        {i + 1}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex justify-between items-baseline mb-1">
+                          <span className="text-[11px] font-bold text-gray-700 leading-tight">{measure.name}</span>
+                          <span className="text-[9px] font-black text-gray-900 leading-none shrink-0 ml-2">{measure.count} ({measure.percentage}%)</span>
+                        </div>
+                        <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: '#f3f4f6' }}>
+                          <div 
+                            className="h-full rounded-full" 
+                            style={{ width: `${measure.percentage}%`, backgroundColor: '#22c55e' }}
+                          ></div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {measureStats.length === 0 && (
+                    <p className="text-center text-xs text-gray-400 italic py-2">Nenhuma medida de controle disponível.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              <h2 className="text-sm font-black uppercase border-l-4 border-yellow-500 pl-3 leading-none py-1">Detalhamento das Atividades</h2>
+              <div className="space-y-4">
+                {filteredAprs.map(apr => (
+                  <div 
+                    key={apr.id} 
+                    className="border border-gray-200 rounded-xl bg-white overflow-hidden shadow-sm"
+                  >
+                    {/* Header bar & Activity Title inside an unsplittable container to prevent orphan headers */}
+                    <div className="page-break-avoid" style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}>
+                      {/* Header bar */}
+                      <div className="bg-slate-900 text-white px-4 py-2 flex flex-wrap justify-between items-center gap-2 text-[10px] font-bold">
+                        <div className="flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>Data: {formatDateForDisplay(apr.date)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 font-mono">
+                          <Hash className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>SO: {apr.osNumber}</span>
+                        </div>
+                      </div>
+                      
+                      {/* Activity Title */}
+                      <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200">
+                        <div className="text-[8px] font-black uppercase text-slate-400 tracking-wider mb-0.5">Atividade / Tarefa Executada</div>
+                        <div className="text-xs font-black text-slate-800 leading-tight">{apr.task}</div>
+                      </div>
+                    </div>
+
+                    {/* Risks and Measures Row by Row */}
+                    <div className="divide-y divide-gray-150">
+                      {(apr.risks || []).map((risk, idx) => {
+                        const isHigh = risk.classification === 'Alto';
+                        const isMedium = risk.classification === 'Médio';
+                        
+                        const badgeColor = isHigh 
+                          ? 'bg-red-500 text-white border-red-600' 
+                          : isMedium 
+                            ? 'bg-amber-500 text-white border-amber-600' 
+                            : 'bg-emerald-500 text-white border-emerald-600';
+                        
+                        const badgeText = risk.classification || 'Médio';
+
+                        return (
+                          <div 
+                            key={risk.id || idx} 
+                            className="page-break-avoid w-full" 
+                            style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                          >
+                            <div 
+                              className="flex hover:bg-slate-50/20 transition-colors w-full" 
+                              style={{ display: 'flex', width: '100%' }}
+                            >
+                              {/* Left Side: Risk Name & Severity Badge (42% width) */}
+                              <div className="p-2.5 border-r border-gray-200 flex flex-col justify-between gap-1.5 bg-slate-50/30" style={{ width: '42%', minWidth: '42%', boxSizing: 'border-box' }}>
+                                <div>
+                                  <div className="flex items-start gap-1.5">
+                                    <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${isHigh ? 'text-red-500' : isMedium ? 'text-amber-500' : 'text-emerald-500'}`} style={{ color: isHigh ? '#ef4444' : isMedium ? '#f59e0b' : '#10b981' }} />
+                                    <span className="font-bold text-slate-900 text-[11px] leading-snug">{risk.description}</span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[8px] font-black uppercase tracking-wider border shadow-sm ${badgeColor}`}>
+                                    {badgeText}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Right Side: Preventive Measures (58% width) */}
+                              <div className="p-2.5 bg-white flex flex-col justify-center" style={{ width: '58%', minWidth: '58%', boxSizing: 'border-box' }}>
+                                <div className="text-[8px] font-black uppercase text-slate-400 tracking-wider mb-1">Medidas Preventivas e Controles</div>
+                                {risk.measures && risk.measures.length > 0 ? (
+                                  <ul className="space-y-1">
+                                    {risk.measures.map((measure, mIdx) => (
+                                      <li key={mIdx} className="text-[10.5px] text-slate-700 leading-tight flex items-start gap-1.5">
+                                        <Check className="w-3 h-3 text-emerald-500 mt-0.5 shrink-0 font-bold" style={{ color: '#10b981' }} />
+                                        <span>{measure}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <span className="text-slate-400 italic text-[10px]">Nenhuma medida preventiva cadastrada</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {(apr.risks || []).length === 0 && (
+                      <div className="p-4 text-center text-slate-400 italic text-xs">
+                        Nenhum risco cadastrado para esta atividade.
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {filteredAprs.length === 0 && (
+                  <div className="border border-dashed border-gray-300 rounded-2xl p-8 text-center text-slate-400 italic text-sm">
+                    Nenhuma atividade registrada para o período selecionado.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="mt-16 pt-8 border-t border-gray-100 flex justify-between items-end">
+          <div className="mt-8 pt-4 border-t border-gray-100 flex justify-between items-end page-break-avoid" style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}>
             <div>
-              <p className="text-xs font-bold text-gray-400 uppercase">Relatório gerado em</p>
-              <p className="text-sm font-medium">{new Date().toLocaleString('pt-BR')}</p>
+              <p className="text-[9px] font-bold text-gray-400 uppercase leading-none mb-1">Relatório gerado em</p>
+              <p className="text-[11px] font-medium text-gray-600">{new Date().toLocaleString('pt-BR')}</p>
             </div>
             <div className="text-right">
-              <div className="w-48 border-b border-gray-900 mb-2"></div>
-              <p className="text-xs font-bold text-gray-400 uppercase">Assinatura do Responsável</p>
+              <div className="w-40 border-b border-gray-900 mb-1.5"></div>
+              <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">Assinatura do Responsável</p>
             </div>
           </div>
         </div>
@@ -1420,11 +1699,17 @@ const StatReport = ({ record, setView }: { record: AccidentRecord; setView: (vie
     if (!element) return;
     
     const opt = {
-      margin: 10,
+      margin: [10, 10],
       filename: `Relatorio_Seguranca_${record.month}.pdf`,
       image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      html2canvas: { 
+        scale: 2, 
+        useCORS: true, 
+        logging: false,
+        onclone: setupPDFCloneCompatibility
+      },
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      pagebreak: { mode: ['css', 'legacy'], avoid: '.page-break-avoid' }
     };
     
     // @ts-ignore
@@ -1466,6 +1751,7 @@ const StatReport = ({ record, setView }: { record: AccidentRecord; setView: (vie
               <div>
                 <h1 className="text-2xl font-black uppercase tracking-tighter">Relatório de Desempenho de Segurança</h1>
                 <p className="text-gray-500 font-medium">Indicadores Mensais de Acidentabilidade</p>
+                <p className="text-purple-600 font-bold text-xs mt-1">CONTRATO: 4500083171</p>
               </div>
             </div>
             <div className="text-right">
@@ -1476,28 +1762,28 @@ const StatReport = ({ record, setView }: { record: AccidentRecord; setView: (vie
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 mb-10">
-            <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-8 mb-10">
+            <div className="flex-1 space-y-4">
               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">Dados de Exposição</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gray-50 p-4 rounded-xl">
+              <div className="flex flex-row gap-4">
+                <div className="flex-1 bg-gray-50 p-4 rounded-xl">
                   <p className="text-[10px] font-bold text-gray-400 uppercase">Efetivo Médio</p>
                   <p className="text-xl font-black">{record.employeeCount}</p>
                 </div>
-                <div className="bg-gray-50 p-4 rounded-xl">
+                <div className="flex-1 bg-gray-50 p-4 rounded-xl">
                   <p className="text-[10px] font-bold text-gray-400 uppercase">Horas Trabalhadas</p>
                   <p className="text-xl font-black">{Math.round(record.htt).toLocaleString()}</p>
                 </div>
               </div>
             </div>
-            <div className="space-y-4">
+            <div className="flex-1 space-y-4">
               <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">Indicadores de Desempenho</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border" style={{ backgroundColor: '#eff6ff', borderColor: '#dbeafe' }}>
+              <div className="flex flex-row gap-4">
+                <div className="flex-1 p-4 rounded-xl border" style={{ backgroundColor: '#eff6ff', borderColor: '#dbeafe' }}>
                   <p className="text-[10px] font-bold uppercase" style={{ color: '#2563eb' }}>Taxa Frequência (TF)</p>
                   <p className="text-xl font-black" style={{ color: '#1d4ed8' }}>{record.frequencyRate.toFixed(2)}</p>
                 </div>
-                <div className="p-4 rounded-xl border" style={{ backgroundColor: '#faf5ff', borderColor: '#f3e8ff' }}>
+                <div className="flex-1 p-4 rounded-xl border" style={{ backgroundColor: '#faf5ff', borderColor: '#f3e8ff' }}>
                   <p className="text-[10px] font-bold uppercase" style={{ color: '#9333ea' }}>Taxa Gravidade (TG)</p>
                   <p className="text-xl font-black" style={{ color: '#7e22ce' }}>{record.severityRate.toFixed(2)}</p>
                 </div>
@@ -1507,20 +1793,20 @@ const StatReport = ({ record, setView }: { record: AccidentRecord; setView: (vie
 
           <div className="space-y-6">
             <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-1">Resumo de Ocorrências</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="border border-gray-200 p-4 rounded-xl text-center">
+            <div className="flex flex-row flex-wrap sm:flex-nowrap gap-4">
+              <div className="flex-1 min-w-[100px] border border-gray-200 p-4 rounded-xl text-center">
                 <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acidentes CPT</p>
                 <p className="text-2xl font-black" style={{ color: '#ef4444' }}>{record.accidentsWithLostTime}</p>
               </div>
-              <div className="border border-gray-200 p-4 rounded-xl text-center">
+              <div className="flex-1 min-w-[100px] border border-gray-200 p-4 rounded-xl text-center">
                 <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Acidentes SPT</p>
                 <p className="text-2xl font-black" style={{ color: '#f97316' }}>{record.accidentsWithoutLostTime}</p>
               </div>
-              <div className="border border-gray-200 p-4 rounded-xl text-center">
+              <div className="flex-1 min-w-[100px] border border-gray-200 p-4 rounded-xl text-center">
                 <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Fatais</p>
                 <p className="text-2xl font-black text-gray-900">{record.fatalAccidents || 0}</p>
               </div>
-              <div className="border border-gray-200 p-4 rounded-xl text-center">
+              <div className="flex-1 min-w-[100px] border border-gray-200 p-4 rounded-xl text-center">
                 <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Dias Perdidos</p>
                 <p className="text-2xl font-black" style={{ color: '#b91c1c' }}>{record.daysLost}</p>
               </div>
@@ -1531,7 +1817,7 @@ const StatReport = ({ record, setView }: { record: AccidentRecord; setView: (vie
             <p><strong>Nota:</strong> Os cálculos de Taxa de Frequência e Gravidade seguem os critérios da NBR 14280. HTT (Horas Homem Trabalhadas) é a base para o cálculo dos coeficientes de acidentabilidade.</p>
           </div>
 
-          <div className="mt-20 flex flex-col sm:flex-row justify-between items-center gap-12 px-8">
+          <div className="mt-20 flex flex-col sm:flex-row justify-between items-center gap-12 px-8 page-break-avoid">
             <div className="text-center">
               <div className="w-64 border-b border-gray-400 mb-2"></div>
               <p className="text-[10px] font-bold text-gray-400 uppercase">Responsável Técnico / SESMT</p>
@@ -1558,11 +1844,71 @@ const generateId = () => {
   return Math.random().toString(36).substring(2) + Date.now().toString(36);
 };
 
+const LaborDayMessage = () => {
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    const today = new Date();
+    // Month is 0-indexed, so 4 is May
+    const isLaborDay = today.getFullYear() === 2026 && today.getMonth() === 4 && today.getDate() === 1;
+    
+    if (isLaborDay) {
+      const hasSeen = localStorage.getItem('seenLaborDay2026');
+      if (!hasSeen) {
+        setShow(true);
+      }
+    }
+  }, []);
+
+  if (!show) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-white rounded-[2rem] p-8 max-w-sm w-full text-center shadow-2xl relative overflow-hidden"
+      >
+        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-purple-500 to-yellow-500" />
+        
+        <div className="w-20 h-20 bg-yellow-50 rounded-full flex items-center justify-center mx-auto mb-6">
+          <Briefcase className="text-yellow-600 w-10 h-10" />
+        </div>
+        
+        <h2 className="text-2xl font-black text-gray-900 mb-2">Feliz Dia do Trabalhador!</h2>
+        <p className="text-gray-600 leading-relaxed mb-8 text-sm">
+          Agradecemos por todo o seu esforço e dedicação na construção de um ambiente mais seguro para todos. Aproveite seu dia!
+        </p>
+        
+        <button 
+          onClick={() => {
+            localStorage.setItem('seenLaborDay2026', 'true');
+            setShow(false);
+          }}
+          className="w-full bg-yellow-500 hover:bg-yellow-600 text-white py-4 rounded-2xl font-bold transition-all shadow-lg active:scale-95"
+        >
+          Continuar
+        </button>
+      </motion.div>
+    </div>
+  );
+};
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <LaborDayMessage />
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [asyncError, setAsyncError] = useState<any>(null);
   const [aprs, setAprs] = useState<APR[]>([]);
+  const [aprsLimit, setAprsLimit] = useState(100);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [accidentRecords, setAccidentRecords] = useState<AccidentRecord[]>([]);
   const [view, setView] = useState<'home' | 'list' | 'edit' | 'print' | 'employees' | 'statistics' | 'stat-report' | 'apr-monthly-report'>('home');
@@ -1573,6 +1919,9 @@ export default function App() {
   const [empDeleteConfirmId, setEmpDeleteConfirmId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
+  const [dateFilterType, setDateFilterType] = useState<string>('all');
+  const [selectedStartDate, setSelectedStartDate] = useState<string>('');
+  const [selectedEndDate, setSelectedEndDate] = useState<string>('');
   const [selectedRole, setSelectedRole] = useState<string>('all');
   const [selectedEmpRole, setSelectedEmpRole] = useState<string>('all');
   const [reportMonth, setReportMonth] = useState(new Date().toISOString().substring(0, 7));
@@ -1582,6 +1931,11 @@ export default function App() {
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showEmployeeSuccess, setShowEmployeeSuccess] = useState(false);
+  const [copiedEmployees, setCopiedEmployees] = useState(false);
+  const [importJsonInput, setImportJsonInput] = useState('');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [showImportArea, setShowImportArea] = useState(false);
   const [showAprSuccess, setShowAprSuccess] = useState(false);
   const [quickEmpName, setQuickEmpName] = useState('');
   const [quickEmpRole, setQuickEmpRole] = useState('Executante');
@@ -1592,6 +1946,7 @@ export default function App() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showCommonRisks, setShowCommonRisks] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const [pages, setPages] = useState<any[][]>([]);
 
   // Trigger ErrorBoundary for async errors
   if (asyncError) {
@@ -1632,12 +1987,14 @@ export default function App() {
           // Sync user profile to Firestore if it doesn't exist
           if (!userDoc.exists()) {
             try {
-              await setDoc(doc(db, 'users', user.uid), {
+              const profileData = {
                 uid: user.uid,
-                email: user.email,
+                email: user.email || '',
                 role: isDefaultAdmin ? 'admin' : 'user'
-              });
+              };
+              await setDoc(doc(db, 'users', user.uid), profileData);
             } catch (error) {
+              console.error("CRITICAL: setDoc failed for user profile:", error);
               try {
                 handleFirestoreError(error, OperationType.WRITE, `users/${user.uid}`);
               } catch (e) {
@@ -1663,7 +2020,7 @@ export default function App() {
   useEffect(() => {
     if (!isAuthReady || !user) return;
 
-    const qAprs = query(collection(db, 'aprs'), orderBy('createdAt', 'desc'), limit(100));
+    const qAprs = query(collection(db, 'aprs'), orderBy('createdAt', 'desc'), limit(aprsLimit));
     const unsubAprs = onSnapshot(qAprs, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data() as APR);
       setAprs(data);
@@ -1677,7 +2034,7 @@ export default function App() {
       }
     });
 
-    const qEmployees = query(collection(db, 'employees'), orderBy('name', 'asc'), limit(100));
+    const qEmployees = query(collection(db, 'employees'), orderBy('name', 'asc'), limit(1000));
     const unsubEmployees = onSnapshot(qEmployees, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data() as Employee);
       setEmployees(data);
@@ -1691,7 +2048,7 @@ export default function App() {
       }
     });
 
-    const qAccidents = query(collection(db, 'accidentRecords'), orderBy('month', 'desc'), limit(100));
+    const qAccidents = query(collection(db, 'accidentRecords'), orderBy('month', 'desc'), limit(1000));
     const unsubAccidents = onSnapshot(qAccidents, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data() as AccidentRecord);
       setAccidentRecords(data);
@@ -1710,7 +2067,7 @@ export default function App() {
       unsubEmployees();
       unsubAccidents();
     };
-  }, [isAuthReady, user]);
+  }, [isAuthReady, user, aprsLimit]);
 
   useEffect(() => {
     if (showEmployeeSuccess) {
@@ -1725,6 +2082,110 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [showAprSuccess]);
+
+  useEffect(() => {
+    if (view !== 'print' || !currentApr) {
+      return;
+    }
+    
+    const timer = setTimeout(() => {
+      const headerEl = document.getElementById('measuring-header');
+      const risksHeaderEl = document.getElementById('measuring-risks-header');
+      const photosEl = document.getElementById('measuring-photos');
+      const signaturesEl = document.getElementById('measuring-signatures');
+      
+      if (!headerEl) {
+        console.warn('Measuring header element not found');
+        return;
+      }
+      
+      const headerHeight = headerEl.offsetHeight;
+      const risksHeaderHeight = risksHeaderEl ? risksHeaderEl.offsetHeight : 50;
+      const photosHeight = photosEl ? photosEl.offsetHeight : 0;
+      const signaturesHeight = signaturesEl ? signaturesEl.offsetHeight : 200;
+      
+      const riskHeights: number[] = [];
+      (currentApr.risks || []).forEach((_, idx) => {
+        const el = document.getElementById(`measuring-risk-${idx}`);
+        riskHeights.push(el ? el.offsetHeight : 80);
+      });
+      
+      const maxPage1Height = 880; // Content limit on Page 1
+      const maxPageSubsequentHeight = 910; // Content limit on Page 2+
+      const subHeaderHeight = 35; // Height offset for subsequent pages
+      const computedPages: any[][] = [];
+      let currentPageItems: any[] = [];
+      let currentPageHeight = 0;
+      
+      const checkPageBreak = (requiredHeight: number, isSubsequent: boolean) => {
+        const pageLimit = isSubsequent ? maxPageSubsequentHeight : maxPage1Height;
+        if (currentPageHeight + requiredHeight > pageLimit) {
+          return true;
+        }
+        return false;
+      };
+      
+      // Page 1 always starts with the main Header block
+      currentPageItems.push({ type: 'header', height: headerHeight });
+      currentPageHeight += headerHeight;
+      
+      // Add Risks Header if risks exist
+      if ((currentApr.risks || []).length > 0) {
+        const isSubsequent = computedPages.length > 0;
+        if (checkPageBreak(risksHeaderHeight, isSubsequent)) {
+          computedPages.push(currentPageItems);
+          currentPageItems = [];
+          currentPageHeight = subHeaderHeight;
+        }
+        currentPageItems.push({ type: 'risks-header', height: risksHeaderHeight });
+        currentPageHeight += risksHeaderHeight;
+      }
+      
+      // Add each Risk block
+      (currentApr.risks || []).forEach((risk, idx) => {
+        const rHeight = riskHeights[idx];
+        const isSubsequent = computedPages.length > 0;
+        if (checkPageBreak(rHeight, isSubsequent)) {
+          computedPages.push(currentPageItems);
+          currentPageItems = [];
+          currentPageHeight = subHeaderHeight;
+        }
+        currentPageItems.push({ type: 'risk', data: risk, index: idx, height: rHeight });
+        currentPageHeight += rHeight;
+      });
+      
+      // Add Photos block (strictly after Risks)
+      if ((currentApr.photos || []).length > 0) {
+        const isSubsequent = computedPages.length > 0;
+        if (checkPageBreak(photosHeight, isSubsequent)) {
+          computedPages.push(currentPageItems);
+          currentPageItems = [];
+          currentPageHeight = subHeaderHeight;
+        }
+        currentPageItems.push({ type: 'photos', height: photosHeight });
+        currentPageHeight += photosHeight;
+      }
+      
+      // Add Signatures block
+      const isSubsequentSig = computedPages.length > 0;
+      if (checkPageBreak(signaturesHeight, isSubsequentSig)) {
+        computedPages.push(currentPageItems);
+        currentPageItems = [];
+        currentPageHeight = subHeaderHeight;
+      }
+      currentPageItems.push({ type: 'signatures', height: signaturesHeight });
+      currentPageHeight += signaturesHeight;
+      
+      // Push final page
+      if (currentPageItems.length > 0) {
+        computedPages.push(currentPageItems);
+      }
+      
+      setPages(computedPages);
+    }, 400); // 400ms is safe for full DOM paint of Base64 images
+    
+    return () => clearTimeout(timer);
+  }, [currentApr, view]);
 
   useEffect(() => {
     if (saveError) {
@@ -1766,7 +2227,53 @@ export default function App() {
         location.toLowerCase().includes(searchTerm.toLowerCase()) ||
         osNumber.toLowerCase().includes(searchTerm.toLowerCase());
       
-      const matchesMonth = selectedMonth === 'all' || date.startsWith(selectedMonth);
+      let matchesDate = true;
+      const today = new Date();
+      // Format as YYYY-MM-DD using local timezone/offset values to ensure accuracy
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      const todayStr = `${yyyy}-${mm}-${dd}`;
+
+      if (dateFilterType === 'today') {
+        matchesDate = date === todayStr;
+      } else if (dateFilterType === 'yesterday') {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const y_yyyy = yesterday.getFullYear();
+        const y_mm = String(yesterday.getMonth() + 1).padStart(2, '0');
+        const y_dd = String(yesterday.getDate()).padStart(2, '0');
+        const yesterdayStr = `${y_yyyy}-${y_mm}-${y_dd}`;
+        matchesDate = date === yesterdayStr;
+      } else if (dateFilterType === '7days') {
+        const limitDate = new Date();
+        limitDate.setDate(limitDate.getDate() - 7);
+        const l_yyyy = limitDate.getFullYear();
+        const l_mm = String(limitDate.getMonth() + 1).padStart(2, '0');
+        const l_dd = String(limitDate.getDate()).padStart(2, '0');
+        const limitStr = `${l_yyyy}-${l_mm}-${l_dd}`;
+        matchesDate = date >= limitStr && date <= todayStr;
+      } else if (dateFilterType === '30days') {
+        const limitDate = new Date();
+        limitDate.setDate(limitDate.getDate() - 30);
+        const l_yyyy = limitDate.getFullYear();
+        const l_mm = String(limitDate.getMonth() + 1).padStart(2, '0');
+        const l_dd = String(limitDate.getDate()).padStart(2, '0');
+        const limitStr = `${l_yyyy}-${l_mm}-${l_dd}`;
+        matchesDate = date >= limitStr && date <= todayStr;
+      } else if (dateFilterType === 'this-month') {
+        const currentMonthStr = `${yyyy}-${mm}`;
+        matchesDate = date.startsWith(currentMonthStr);
+      } else if (dateFilterType === 'specific-month') {
+        matchesDate = selectedMonth === 'all' || date.startsWith(selectedMonth);
+      } else if (dateFilterType === 'custom-range') {
+        if (selectedStartDate) {
+          matchesDate = matchesDate && date >= selectedStartDate;
+        }
+        if (selectedEndDate) {
+          matchesDate = matchesDate && date <= selectedEndDate;
+        }
+      }
       
       const aprParticipants = [
         ...(apr.executors || []),
@@ -1774,11 +2281,11 @@ export default function App() {
         ...(apr.responsible ? [{ name: apr.responsible, role: 'Encarregado/Responsável' }] : [])
       ];
 
-      const matchesRole = selectedRole === 'all' || aprParticipants.some(p => p.role === selectedRole);
+      const matchesRole = selectedRole === 'all' || aprParticipants.some(p => p && p.role === selectedRole);
       
-      return matchesSearch && matchesMonth && matchesRole;
+      return matchesSearch && matchesDate && matchesRole;
     }).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-  }, [aprs, searchTerm, selectedMonth, selectedRole]);
+  }, [aprs, searchTerm, selectedMonth, dateFilterType, selectedStartDate, selectedEndDate, selectedRole]);
 
   const filteredEmployees = useMemo(() => {
     if (!Array.isArray(employees)) return [];
@@ -1828,6 +2335,21 @@ export default function App() {
       uid: user.uid
     };
     setCurrentApr(newApr);
+    setIsReadOnly(false);
+    setView('edit');
+  };
+
+  const handleDuplicateApr = (apr: APR) => {
+    if (!user) return;
+    const duplicated: APR = {
+      ...apr,
+      id: generateId(),
+      task: apr.task ? `${apr.task} (Cópia)` : '',
+      date: new Date().toISOString().split('T')[0],
+      createdAt: new Date().toISOString(),
+      uid: user.uid,
+    };
+    setCurrentApr(duplicated);
     setIsReadOnly(false);
     setView('edit');
   };
@@ -1959,26 +2481,34 @@ export default function App() {
 
   const handlePrint = (apr: APR) => {
     setCurrentApr(apr);
+    setPages([]);
     setView('print');
     setTimeout(() => {
       window.print();
       setView('list');
-    }, 500);
+    }, 1800);
   };
 
   const handleExportPDF = (apr: APR, returnTo: typeof view = 'list') => {
     setCurrentApr(apr);
+    setPages([]);
     setView('print');
     
     setTimeout(() => {
       const element = document.getElementById('apr-print-view');
       if (element) {
         const opt = {
-          margin: 10,
+          margin: 0,
           filename: `APR_${apr.osNumber || apr.id.slice(0,8)}.pdf`,
           image: { type: 'jpeg' as const, quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
+          html2canvas: { 
+            scale: 2, 
+            useCORS: true, 
+            logging: false,
+            onclone: setupPDFCloneCompatibility
+          },
+          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const },
+          pagebreak: { mode: ['css', 'legacy'] }
         };
         html2pdf().set(opt).from(element).save().then(() => {
           setView(returnTo);
@@ -1986,7 +2516,7 @@ export default function App() {
       } else {
         setView(returnTo);
       }
-    }, 1000);
+    }, 1800);
   };
 
   const handleExportStatPDF = (record: AccidentRecord, returnTo: typeof view = 'statistics') => {
@@ -1994,14 +2524,20 @@ export default function App() {
     setView('stat-report');
     
     setTimeout(() => {
-      const element = document.getElementById('stat-report-view');
+      const element = document.getElementById('stat-report-content');
       if (element) {
         const opt = {
-          margin: 10,
+          margin: [15, 15, 15, 15] as [number, number, number, number],
           filename: `Relatorio_Seguranca_${record.month}.pdf`,
           image: { type: 'jpeg' as const, quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
+          html2canvas: { 
+            scale: 2, 
+            useCORS: true, 
+            logging: false,
+            onclone: setupPDFCloneCompatibility
+          },
+          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const },
+          pagebreak: { mode: ['css', 'legacy'], avoid: '.page-break-avoid' }
         };
         html2pdf().set(opt).from(element).save().then(() => {
           setView(returnTo);
@@ -2020,18 +2556,19 @@ export default function App() {
       const element = document.getElementById('apr-monthly-report-content');
       if (element) {
         const opt = {
-          margin: 10,
+          margin: [15, 15, 15, 15] as [number, number, number, number],
           filename: `Relatorio_Consolidado_APR_${month}.pdf`,
           image: { type: 'jpeg' as const, quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const }
+          html2canvas: { 
+            scale: 2, 
+            useCORS: true, 
+            logging: false,
+            onclone: setupPDFCloneCompatibility
+          },
+          jsPDF: { unit: 'mm' as const, format: 'a4' as const, orientation: 'portrait' as const },
+          pagebreak: { mode: ['css', 'legacy'], avoid: ['.page-break-avoid', 'tr'] }
         };
-        // @ts-ignore
-        html2pdf().set(opt).from(element).save().then(() => {
-          setView('list');
-        });
-      } else {
-        setView('list');
+        html2pdf().set(opt).from(element).save();
       }
     }, 1500);
   };
@@ -2064,12 +2601,13 @@ export default function App() {
     }
   };
 
-  const addRisk = (riskDesc: string, measures: string[]) => {
+  const addRisk = (riskDesc: string, measures: string[], classification?: 'Baixo' | 'Médio' | 'Alto') => {
     if (!currentApr) return;
     const newRisk: Risk = {
       id: generateId(),
       description: riskDesc,
-      measures: [...measures]
+      measures: [...measures],
+      classification: classification || 'Médio'
     };
     setCurrentApr({
       ...currentApr,
@@ -2252,6 +2790,79 @@ export default function App() {
     }
   };
 
+  const handleExportEmployeesJson = () => {
+    try {
+      const dataStr = JSON.stringify(employees, null, 2);
+      const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+      
+      const exportFileDefaultName = 'funcionarios_com_assinaturas.json';
+      
+      const linkElement = document.createElement('a');
+      linkElement.setAttribute('href', dataUri);
+      linkElement.setAttribute('download', exportFileDefaultName);
+      linkElement.click();
+    } catch (error) {
+      console.error("Erro exportando funcionarios", error);
+    }
+  };
+
+  const handleCopyEmployeesJson = () => {
+    try {
+      const dataStr = JSON.stringify(employees, null, 2);
+      navigator.clipboard.writeText(dataStr);
+      setCopiedEmployees(true);
+      setTimeout(() => setCopiedEmployees(false), 3000);
+    } catch (error) {
+      console.error("Erro ao copiar json", error);
+    }
+  };
+
+  const handleImportEmployeesJson = async () => {
+    if (!importJsonInput.trim()) return;
+    setImportError(null);
+    setImportSuccess(null);
+    try {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(importJsonInput.trim());
+      } catch (e) {
+        setImportError("O JSON informado é inválido. Verifique o formato.");
+        return;
+      }
+
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      if (list.length === 0) {
+        setImportError("Nenhum funcionário encontrado na lista.");
+        return;
+      }
+
+      let importedCount = 0;
+      for (const item of list) {
+        if (item && item.name && item.role) {
+          const id = item.id || generateId();
+          const pEmp: Employee = {
+            id,
+            name: String(item.name).trim(),
+            role: String(item.role).trim(),
+            signature: item.signature || ''
+          };
+          await setDoc(doc(db, 'employees', id), pEmp);
+          importedCount++;
+        }
+      }
+      
+      setImportSuccess(`${importedCount} funcionário(s) importado(s) com sucesso!`);
+      setImportJsonInput('');
+      setTimeout(() => {
+        setImportSuccess(null);
+        setShowImportArea(false);
+      }, 4000);
+    } catch (error) {
+      console.error("Erro importando funcionarios", error);
+      setImportError("Falha ao salvar os funcionários editados.");
+    }
+  };
+
   const handleAddMeasure = (riskId: string, measure: string) => {
     if (!currentApr || !measure.trim()) return;
     const newRisks = currentApr.risks.map(r => 
@@ -2354,133 +2965,480 @@ export default function App() {
   }
 
   if (view === 'print' && currentApr) {
-    return (
-      <div id="apr-print-view" className="p-8 bg-white min-h-screen text-black print:p-0">
-        <div className="border-2 border-black p-4 mb-4">
-          <div className="flex justify-between items-center border-b-2 border-black pb-4 mb-4">
-            <h1 className="text-2xl font-bold uppercase">Análise Preliminar de Risco (APR)</h1>
-            <div className="text-right">
-              <p className="font-bold">ID: {currentApr.id.slice(0, 8)}</p>
-              <p>Data: {formatDateForDisplay(currentApr.date)}</p>
-            </div>
+    if (pages.length === 0) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-900 p-4" style={{ fontFamily: 'Arial, sans-serif' }}>
+          <div className="flex flex-col items-center gap-4 text-center max-w-md">
+            <div className="w-12 h-12 border-4 border-slate-600 border-t-transparent rounded-full animate-spin mb-2"></div>
+            <h2 className="text-lg font-bold uppercase tracking-tight text-slate-800">Paginação APR</h2>
+            <p className="text-slate-500 text-xs">Calculando as alturas dos blocos de riscos, fotos e assinaturas para gerar quebras de página corporativas...</p>
           </div>
           
-          <div className="grid grid-cols-2 gap-4 mb-6">
-            <div>
-              <p className="font-bold uppercase text-xs text-gray-600">Empresa</p>
-              <p className="border-b border-gray-300 pb-1">{currentApr.company}</p>
-            </div>
-            <div>
-              <p className="font-bold uppercase text-xs text-gray-600">Número da OS</p>
-              <p className="border-b border-gray-300 pb-1">{currentApr.osNumber || 'N/A'}</p>
-            </div>
-            <div>
-              <p className="font-bold uppercase text-xs text-gray-600">Local de Trabalho</p>
-              <p className="border-b border-gray-300 pb-1">{currentApr.location}</p>
-            </div>
-            <div>
-              <p className="font-bold uppercase text-xs text-gray-600">Data</p>
-              <p className="border-b border-gray-300 pb-1">{formatDateForDisplay(currentApr.date)}</p>
-            </div>
-            <div className="col-span-2">
-              <p className="font-bold uppercase text-xs text-gray-600">Descrição da Tarefa</p>
-              <p className="border-b border-gray-300 pb-1">{currentApr.task}</p>
-            </div>
-            <div>
-              <p className="font-bold uppercase text-xs text-gray-600">Responsável pela Execução</p>
-              <p className="border-b border-gray-300 pb-1">{currentApr.responsible}</p>
-            </div>
-          </div>
-
-          {(currentApr.photos || []).length > 0 && (
-            <div className="mb-6">
-              <p className="font-bold uppercase text-xs text-gray-600 mb-2">Fotos das Atividades</p>
-              <div className="grid grid-cols-3 gap-2">
-                {(currentApr.photos || []).map((photo, i) => (
-                  <img key={i} src={photo} alt={`Atividade ${i+1}`} className="w-full h-32 object-cover border border-gray-300 rounded" referrerPolicy="no-referrer" />
-                ))}
-              </div>
-            </div>
-          )}
-
-          <table className="w-full border-collapse border border-black mb-8">
-            <thead>
-              <tr style={{ backgroundColor: '#f3f4f6' }}>
-                <th className="border border-black p-2 text-left w-1/3 uppercase text-sm">Riscos Identificados</th>
-                <th className="border border-black p-2 text-left uppercase text-sm">Medidas Preventivas / Controle</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(currentApr.risks || []).map(risk => (
-                <tr key={risk.id}>
-                  <td className="border border-black p-2 align-top font-medium">{risk.description}</td>
-                  <td className="border border-black p-2 align-top">
-                    <ul className="list-disc list-inside space-y-1">
-                      {(risk.measures || []).map((m, i) => (
-                        <li key={i} className="text-sm">{m}</li>
-                      ))}
-                    </ul>
-                  </td>
-                </tr>
-              ))}
-              {(currentApr.risks || []).length === 0 && (
+          {/* Measuring Container (Off-screen) */}
+          <div 
+            id="apr-measuring-container"
+            style={{ 
+              position: 'absolute', 
+              top: 0, 
+              left: '-9999px', 
+              width: '210mm', 
+              boxSizing: 'border-box', 
+              padding: '12mm',
+              backgroundColor: 'white',
+              color: 'black'
+            }}
+          >
+            {/* 1. Header & Metadata Table */}
+            <table id="measuring-header" className="w-full border-collapse border border-gray-300 mb-3" style={{ fontFamily: 'Arial, sans-serif' }}>
+              <tbody>
                 <tr>
-                  <td colSpan={2} className="border border-black p-4 text-center text-gray-400 italic">
-                    Nenhum risco registrado.
+                  <td className="p-2.5 border border-gray-300 w-1/2">
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider">Empresa</div>
+                    <div className="font-semibold text-slate-800 text-xs mt-0.5">{currentApr.company}</div>
+                  </td>
+                  <td className="p-2.5 border border-gray-300 w-1/2">
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider">Número da OS</div>
+                    <div className="font-semibold text-slate-800 text-xs mt-0.5">{currentApr.osNumber || 'N/A'}</div>
                   </td>
                 </tr>
-              )}
-            </tbody>
-          </table>
+                <tr>
+                  <td className="p-2.5 border border-gray-300">
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider">Local de Trabalho</div>
+                    <div className="font-semibold text-slate-800 text-xs mt-0.5">{currentApr.location}</div>
+                  </td>
+                  <td className="p-2.5 border border-gray-300">
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider">Data de Emissão</div>
+                    <div className="font-semibold text-slate-800 text-xs mt-0.5">{formatDateForDisplay(currentApr.date)}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={2} className="p-2.5 border border-gray-300">
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider">Descrição da Tarefa</div>
+                    <div className="font-semibold text-slate-800 text-xs mt-0.5">{currentApr.task}</div>
+                  </td>
+                </tr>
+                <tr>
+                  <td colSpan={2} className="p-2.5 border border-gray-300">
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider">Responsável pela Execução</div>
+                    <div className="font-semibold text-slate-800 text-xs mt-0.5">{currentApr.responsible}</div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
 
-          <div className="mt-16 space-y-16">
-            <div className="grid grid-cols-2 gap-x-12">
-              <div className="text-center">
-                <div className="border-t border-black pt-4 flex flex-col items-center">
-                  {currentApr.signature && (
-                    <img src={currentApr.signature} alt="Assinatura" className="h-16 mb-2 object-contain" referrerPolicy="no-referrer" />
-                  )}
-                  <p className="font-bold uppercase text-[10px] tracking-wider mb-1">Assinatura do Responsável</p>
-                  <p className="text-xs font-medium">{currentApr.responsible}</p>
-                </div>
+            {/* 2. Risks Header */}
+            {currentApr.risks && currentApr.risks.length > 0 && (
+              <div id="measuring-risks-header" className="bg-slate-100 border border-gray-300 px-3 py-1.5 flex justify-between items-center text-[10px] font-bold uppercase text-slate-700 tracking-wider mb-0.5">
+                <span>Riscos Identificados e Medidas de Controle</span>
+                <span className="font-mono text-gray-500">Qtd: {currentApr.risks.length}</span>
               </div>
-              <div className="text-center">
-                <div className="border-t border-black pt-4 flex flex-col items-center">
-                  <p className="font-bold uppercase text-[10px] tracking-wider mb-4">Assinatura do Técnico de Segurança</p>
-                  <div className="grid grid-cols-1 gap-y-6 w-full">
-                    {(currentApr.safetyTechnicians || []).map(tech => (
-                      <div key={tech.id} className="flex flex-col items-center">
-                        {tech.signature && (
-                          <img src={tech.signature} alt={tech.name} className="h-12 mb-1 object-contain" referrerPolicy="no-referrer" />
-                        )}
-                        <p className="text-[10px] font-bold uppercase border-t border-gray-200 pt-1 w-2/3 mx-auto">{tech.name}</p>
+            )}
+
+            {/* 3. Risks List Items */}
+            {(currentApr.risks || []).map((risk, idx) => {
+              const isHigh = risk.classification === 'Alto';
+              const isMedium = risk.classification === 'Médio';
+              const badgeText = risk.classification || 'Médio';
+              return (
+                <div key={risk.id || idx} id={`measuring-risk-${idx}`} className="border border-gray-300 bg-white flex w-full overflow-hidden text-xs mb-1" style={{ fontFamily: 'Arial, sans-serif' }}>
+                  <div className="p-2.5 border-r border-gray-300 flex flex-col justify-between" style={{ width: '42%', minWidth: '42%', boxSizing: 'border-box', backgroundColor: '#fafafa' }}>
+                    <div className="flex items-start gap-1.5">
+                      <AlertTriangle className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${isHigh ? 'text-red-500' : isMedium ? 'text-amber-500' : 'text-emerald-500'}`} style={{ color: isHigh ? '#ef4444' : isMedium ? '#d97706' : '#059669' }} />
+                      <span className="font-bold text-slate-800 text-[11px] leading-tight">{risk.description}</span>
+                    </div>
+                    <div className="mt-1.5">
+                      <span className={`inline-block px-1.5 py-0.5 rounded-none text-[8px] font-bold uppercase tracking-wider border ${
+                        isHigh ? 'bg-red-50 text-red-700 border-red-200' : isMedium ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      }`}>
+                        {badgeText}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-white flex flex-col justify-center flex-1" style={{ width: '58%', minWidth: '58%', boxSizing: 'border-box' }}>
+                    <div className="text-[8px] font-bold text-gray-400 uppercase tracking-wider mb-1">Medidas Preventivas e Controles</div>
+                    {risk.measures && risk.measures.length > 0 ? (
+                      <ul className="space-y-0.5">
+                        {risk.measures.map((measure, mIdx) => (
+                          <li key={mIdx} className="text-[10px] text-slate-700 leading-tight flex items-start gap-1">
+                            <Check className="w-3 h-3 text-emerald-600 mt-0.5 shrink-0 font-bold" style={{ color: '#059669' }} />
+                            <span>{measure}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="text-gray-400 italic text-[10px]">Nenhuma medida preventiva cadastrada</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* 4. Photos Block */}
+            {(currentApr.photos || []).length > 0 && (
+              <div id="measuring-photos" className="border border-gray-300 p-3 mb-2.5 mt-2.5" style={{ breakInside: 'avoid', pageBreakInside: 'avoid', backgroundColor: '#ffffff', fontFamily: 'Arial, sans-serif' }}>
+                <p className="font-bold uppercase text-[8px] text-slate-500 tracking-wider mb-2 border-b border-gray-200 pb-1">Fotos das Atividades</p>
+                {currentApr.photos.length === 1 ? (
+                  <div className="flex justify-center py-1">
+                    <img 
+                      src={currentApr.photos[0]} 
+                      alt="Atividade 1" 
+                      className="object-cover border border-gray-200 rounded-none shadow-none" 
+                      style={{ width: '240px', height: '150px' }}
+                      referrerPolicy="no-referrer" 
+                    />
+                  </div>
+                ) : (
+                  <div className="grid gap-2" style={{ display: 'grid', gridTemplateColumns: currentApr.photos.length === 2 ? '1fr 1fr' : '1fr 1fr 1fr', gap: '8px' }}>
+                    {currentApr.photos.map((photo, i) => (
+                      <img 
+                        key={i} 
+                        src={photo} 
+                        alt={`Atividade ${i+1}`} 
+                        className="w-full object-cover border border-gray-200 rounded-none shadow-none" 
+                        style={{ height: currentApr.photos.length === 2 ? '120px' : '90px' }}
+                        referrerPolicy="no-referrer" 
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 5. Signatures Block */}
+            <div id="measuring-signatures" className="border border-gray-300 p-3 mt-2.5 bg-white" style={{ breakInside: 'avoid', pageBreakInside: 'avoid', fontFamily: 'Arial, sans-serif' }}>
+              <p className="font-bold uppercase text-[8px] text-slate-500 tracking-wider text-center mb-3 border-b border-gray-200 pb-1">Assinaturas de Validação</p>
+              
+              <div className="grid grid-cols-2 gap-4 pb-3 border-b border-gray-200" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="text-center flex flex-col items-center justify-between">
+                  <div className="h-8 flex items-center justify-center mb-0.5">
+                    {currentApr.signature ? (
+                      <img src={currentApr.signature} alt="Assinatura" className="max-h-7 object-contain" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="w-24 border-b border-dashed border-gray-300 h-4"></div>
+                    )}
+                  </div>
+                  <div className="w-3/4 border-t border-gray-300 pt-0.5">
+                    <p className="text-[9px] font-bold text-slate-800 leading-none">{currentApr.responsible}</p>
+                    <p className="text-[7px] text-gray-500 uppercase tracking-wider mt-0.5">Responsável pela Execução</p>
+                  </div>
+                </div>
+                
+                <div className="text-center flex flex-col items-center justify-between">
+                  <div className="flex flex-col gap-2 w-full">
+                    {(currentApr.safetyTechnicians || []).map((tech, tIdx) => (
+                      <div key={tIdx} className="flex flex-col items-center">
+                        <div className="h-6 flex items-center justify-center mb-0.5">
+                          {tech.signature ? (
+                            <img src={tech.signature} alt={tech.name} className="max-h-5 object-contain" referrerPolicy="no-referrer" />
+                          ) : (
+                            <div className="w-24 border-b border-dashed border-gray-300 h-3"></div>
+                          )}
+                        </div>
+                        <div className="w-3/4 border-t border-gray-200 pt-0.5">
+                          <p className="text-[9px] font-bold text-slate-800 leading-none">{tech.name}</p>
+                          <p className="text-[7px] text-gray-500 uppercase tracking-wider mt-0.5">Técnico de Segurança</p>
+                        </div>
                       </div>
                     ))}
+                    {(currentApr.safetyTechnicians || []).length === 0 && (
+                      <div className="flex flex-col items-center">
+                        <div className="h-6 flex items-center justify-center mb-0.5">
+                          <div className="w-24 border-b border-dashed border-gray-300 h-3"></div>
+                        </div>
+                        <div className="w-3/4 border-t border-gray-200 pt-0.5">
+                          <p className="text-[9px] font-bold text-gray-300 uppercase leading-none">Pendente</p>
+                          <p className="text-[7px] text-gray-500 uppercase tracking-wider mt-0.5">Técnico de Segurança</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
-            </div>
-            
-            <div className="pt-8">
-              <div className="border-t border-black pt-4">
-                <p className="font-bold uppercase text-[10px] tracking-wider text-center mb-8">Assinatura dos Executantes</p>
-                <div className="grid grid-cols-2 gap-x-12 gap-y-12">
-                  {(currentApr.executors || []).map(executor => (
-                    <div key={executor.id} className="flex flex-col items-center">
-                      {executor.signature && (
-                        <img src={executor.signature} alt={executor.name} className="h-12 mb-1 object-contain" referrerPolicy="no-referrer" />
-                      )}
-                      <div className="w-full border-t border-gray-200 pt-1 text-center">
-                        <p className="text-[10px] font-bold uppercase">{executor.name}</p>
-                        <p className="text-[8px] text-gray-400 uppercase tracking-tight">{executor.role}</p>
+              
+              <div className="pt-2">
+                <p className="font-bold uppercase text-[7.5px] text-slate-400 tracking-wider text-center mb-2">Assinatura dos Executantes</p>
+                {currentApr.executors && currentApr.executors.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
+                    {currentApr.executors.map((executor, eIdx) => (
+                      <div key={eIdx} className="flex flex-col items-center text-center">
+                        <div className="h-6 flex items-center justify-center mb-0.5">
+                          {executor.signature ? (
+                            <img src={executor.signature} alt={executor.name} className="max-h-5 object-contain" referrerPolicy="no-referrer" />
+                          ) : (
+                            <div className="w-20 border-b border-dashed border-gray-300 h-3"></div>
+                          )}
+                        </div>
+                        <div className="w-3/4 border-t border-gray-200 pt-0.5">
+                          <p className="text-[8px] font-bold text-slate-800 leading-none">{executor.name}</p>
+                          <p className="text-[6.5px] text-gray-400 uppercase tracking-wider mt-0.5">{executor.role}</p>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center text-gray-400 italic text-[8px] py-0.5">Nenhum executante selecionado</p>
+                )}
               </div>
             </div>
           </div>
         </div>
+      );
+    }
+
+    // Fully partitioned page view for export / print
+    return (
+      <div id="apr-print-view" className="bg-slate-100 min-h-screen py-8 px-4 flex flex-col items-center gap-6 print:bg-white print:p-0 print:gap-0" style={{ fontFamily: 'Arial, sans-serif' }}>
+        {pages.map((pageItems, pageIdx) => (
+          <div 
+            key={pageIdx} 
+            className="bg-white text-black p-[12mm] relative flex flex-col justify-between print:shadow-none print:border-none print:m-0"
+            style={{ 
+              width: '210mm', 
+              height: '297mm', 
+              boxSizing: 'border-box', 
+              pageBreakAfter: 'always',
+              breakInside: 'avoid',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <div className="flex-1 flex flex-col">
+              {/* Page Header */}
+              {pageIdx === 0 ? (
+                <div className="flex justify-between items-center border-b border-gray-300 pb-2 mb-3">
+                  <div>
+                    <h1 className="text-sm font-bold uppercase text-slate-800 tracking-tight leading-none">Análise Preliminar de Risco</h1>
+                    <p className="text-[7.5px] font-medium text-gray-400 uppercase tracking-wider mt-1">APR PRO • Segurança do Trabalho</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] font-mono font-bold text-slate-700">ID: {currentApr.id.slice(0, 8).toUpperCase()}</p>
+                    <p className="text-[7.5px] font-medium text-gray-400 mt-1 uppercase">Data: {formatDateForDisplay(currentApr.date)}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex justify-between items-center border-b border-gray-300 pb-1 mb-2 text-[8px] text-gray-400 font-bold uppercase tracking-wider">
+                  <span>Análise Preliminar de Risco (APR) - Continuação</span>
+                  <span>ID: {currentApr.id.slice(0, 8).toUpperCase()} | OS: {currentApr.osNumber || 'N/A'}</span>
+                </div>
+              )}
+
+              {/* Page Body Content */}
+              <div className="flex-1 flex flex-col gap-2">
+                {pageItems.map((item, itemIdx) => {
+                  if (item.type === 'header') {
+                    return (
+                      <table key={itemIdx} className="w-full border-collapse border border-gray-300 mb-2.5">
+                        <tbody>
+                          <tr>
+                            <td className="p-2 border border-gray-300 w-1/2">
+                              <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider">Empresa</div>
+                              <div className="font-semibold text-slate-800 text-[10px] mt-0.5">{currentApr.company}</div>
+                            </td>
+                            <td className="p-2 border border-gray-300 w-1/2">
+                              <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider">Número da OS</div>
+                              <div className="font-semibold text-slate-800 text-[10px] mt-0.5">{currentApr.osNumber || 'N/A'}</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td className="p-2 border border-gray-300">
+                              <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider">Local de Trabalho</div>
+                              <div className="font-semibold text-slate-800 text-[10px] mt-0.5">{currentApr.location}</div>
+                            </td>
+                            <td className="p-2 border border-gray-300">
+                              <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider">Data de Emissão</div>
+                              <div className="font-semibold text-slate-800 text-[10px] mt-0.5">{formatDateForDisplay(currentApr.date)}</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td colSpan={2} className="p-2 border border-gray-300">
+                              <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider">Descrição da Tarefa</div>
+                              <div className="font-semibold text-slate-800 text-[10px] mt-0.5">{currentApr.task}</div>
+                            </td>
+                          </tr>
+                          <tr>
+                            <td colSpan={2} className="p-2 border border-gray-300">
+                              <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider">Responsável pela Execução</div>
+                              <div className="font-semibold text-slate-800 text-[10px] mt-0.5">{currentApr.responsible}</div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    );
+                  }
+                  
+                  if (item.type === 'risks-header') {
+                    return (
+                      <div key={itemIdx} className="bg-slate-100 border border-gray-300 px-3 py-1 flex justify-between items-center text-[8.5px] font-bold uppercase text-slate-700 tracking-wider mb-0.5">
+                        <span>Riscos Identificados e Medidas de Controle</span>
+                        <span className="font-mono text-gray-500">Qtd: {(currentApr.risks || []).length}</span>
+                      </div>
+                    );
+                  }
+                  
+                  if (item.type === 'risk') {
+                    const risk = item.data;
+                    const isHigh = risk.classification === 'Alto';
+                    const isMedium = risk.classification === 'Médio';
+                    const badgeText = risk.classification || 'Médio';
+                    
+                    return (
+                      <div key={itemIdx} className="border border-gray-300 bg-white flex w-full overflow-hidden text-[10px] mb-1">
+                        <div className="p-2 border-r border-gray-300 flex flex-col justify-between" style={{ width: '42%', minWidth: '42%', boxSizing: 'border-box', backgroundColor: '#fafafa' }}>
+                          <div className="flex items-start gap-1">
+                            <AlertTriangle className={`w-3 h-3 mt-0.5 shrink-0 ${isHigh ? 'text-red-500' : isMedium ? 'text-amber-500' : 'text-emerald-500'}`} style={{ color: isHigh ? '#ef4444' : isMedium ? '#d97706' : '#059669' }} />
+                            <span className="font-bold text-slate-800 text-[10px] leading-tight">{risk.description}</span>
+                          </div>
+                          <div className="mt-1">
+                            <span className={`inline-block px-1 py-0.5 text-[7px] font-bold uppercase tracking-wider border ${
+                              isHigh ? 'bg-red-50 text-red-700 border-red-200' : isMedium ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            }`}>
+                              {badgeText}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="p-2 bg-white flex flex-col justify-center flex-1" style={{ width: '58%', minWidth: '58%', boxSizing: 'border-box' }}>
+                          <div className="text-[7px] font-bold text-gray-400 uppercase tracking-wider mb-0.5">Medidas Preventivas e Controles</div>
+                          {risk.measures && risk.measures.length > 0 ? (
+                            <ul className="space-y-0.5">
+                              {risk.measures.map((measure: string, mIdx: number) => (
+                                <li key={mIdx} className="text-[9px] text-slate-700 leading-tight flex items-start gap-1">
+                                  <Check className="w-2.5 h-2.5 text-emerald-600 mt-0.5 shrink-0 font-bold" style={{ color: '#059669' }} />
+                                  <span>{measure}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span className="text-gray-400 italic text-[9px]">Nenhuma medida preventiva cadastrada</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+                  
+                  if (item.type === 'photos') {
+                    const photos = currentApr.photos || [];
+                    return (
+                      <div key={itemIdx} className="border border-gray-300 p-2.5 mb-1.5 mt-1.5" style={{ breakInside: 'avoid', pageBreakInside: 'avoid', backgroundColor: '#ffffff' }}>
+                        <p className="font-bold uppercase text-[7.5px] text-slate-500 tracking-wider mb-2 border-b border-gray-200 pb-0.5">Fotos das Atividades</p>
+                        {photos.length === 1 ? (
+                          <div className="flex justify-center py-0.5">
+                            <img 
+                              src={photos[0]} 
+                              alt="Atividade 1" 
+                              className="object-cover border border-gray-200 rounded-none shadow-none" 
+                              style={{ width: '220px', height: '140px' }}
+                              referrerPolicy="no-referrer" 
+                            />
+                          </div>
+                        ) : (
+                          <div className="grid gap-2" style={{ display: 'grid', gridTemplateColumns: photos.length === 2 ? '1fr 1fr' : '1fr 1fr 1fr', gap: '8px' }}>
+                            {photos.map((photo, i) => (
+                              <img 
+                                key={i} 
+                                src={photo} 
+                                alt={`Atividade ${i+1}`} 
+                                className="w-full object-cover border border-gray-200 rounded-none shadow-none" 
+                                style={{ height: photos.length === 2 ? '110px' : '85px' }}
+                                referrerPolicy="no-referrer" 
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  
+                  if (item.type === 'signatures') {
+                    return (
+                      <div key={itemIdx} className="border border-gray-300 p-2.5 mt-1.5 bg-white" style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                        <p className="font-bold uppercase text-[7.5px] text-slate-500 tracking-wider text-center mb-2.5 border-b border-gray-200 pb-0.5">Assinaturas de Validação</p>
+                        
+                        <div className="grid grid-cols-2 gap-4 pb-2 border-b border-gray-200" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                          <div className="text-center flex flex-col items-center justify-between">
+                            <div className="h-8 flex items-center justify-center mb-0.5">
+                              {currentApr.signature ? (
+                                <img src={currentApr.signature} alt="Assinatura" className="max-h-7 object-contain" referrerPolicy="no-referrer" />
+                              ) : (
+                                <div className="w-24 border-b border-dashed border-gray-300 h-4"></div>
+                              )}
+                            </div>
+                            <div className="w-3/4 border-t border-gray-300 pt-0.5">
+                              <p className="text-[8.5px] font-bold text-slate-800 leading-none">{currentApr.responsible}</p>
+                              <p className="text-[6.5px] text-gray-500 uppercase tracking-wider mt-0.5">Responsável pela Execução</p>
+                            </div>
+                          </div>
+                          
+                          <div className="text-center flex flex-col items-center justify-between">
+                            <div className="flex flex-col gap-2 w-full">
+                              {(currentApr.safetyTechnicians || []).map((tech, tIdx) => (
+                                <div key={tIdx} className="flex flex-col items-center">
+                                  <div className="h-6 flex items-center justify-center mb-0.5">
+                                    {tech.signature ? (
+                                      <img src={tech.signature} alt={tech.name} className="max-h-5 object-contain" referrerPolicy="no-referrer" />
+                                    ) : (
+                                      <div className="w-24 border-b border-dashed border-gray-300 h-3"></div>
+                                    )}
+                                  </div>
+                                  <div className="w-3/4 border-t border-gray-200 pt-0.5">
+                                    <p className="text-[8.5px] font-bold text-slate-800 leading-none">{tech.name}</p>
+                                    <p className="text-[6.5px] text-gray-500 uppercase tracking-wider mt-0.5">Técnico de Segurança</p>
+                                  </div>
+                                </div>
+                              ))}
+                              {(currentApr.safetyTechnicians || []).length === 0 && (
+                                <div className="flex flex-col items-center">
+                                  <div className="h-6 flex items-center justify-center mb-0.5">
+                                    <div className="w-24 border-b border-dashed border-gray-300 h-3"></div>
+                                  </div>
+                                  <div className="w-3/4 border-t border-gray-200 pt-0.5">
+                                    <p className="text-[8.5px] font-bold text-gray-300 uppercase leading-none">Pendente</p>
+                                    <p className="text-[6.5px] text-gray-400 uppercase tracking-wider mt-0.5">Técnico de Segurança</p>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="pt-2">
+                          <p className="font-bold uppercase text-[7px] text-slate-400 tracking-wider text-center mb-2">Assinatura dos Executantes</p>
+                          {currentApr.executors && currentApr.executors.length > 0 ? (
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
+                              {currentApr.executors.map((executor, eIdx) => (
+                                <div key={eIdx} className="flex flex-col items-center text-center">
+                                  <div className="h-6 flex items-center justify-center mb-0.5">
+                                    {executor.signature ? (
+                                      <img src={executor.signature} alt={executor.name} className="max-h-5 object-contain" referrerPolicy="no-referrer" />
+                                    ) : (
+                                      <div className="w-20 border-b border-dashed border-gray-300 h-3"></div>
+                                    )}
+                                  </div>
+                                  <div className="w-3/4 border-t border-gray-200 pt-0.5">
+                                    <p className="text-[8px] font-bold text-slate-800 leading-none">{executor.name}</p>
+                                    <p className="text-[6.5px] text-gray-400 uppercase tracking-wider mt-0.5">{executor.role}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-center text-gray-400 italic text-[7.5px] py-0.5">Nenhum executante selecionado</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+            </div>
+
+            {/* Page Footer */}
+            <div className="flex justify-between items-center border-t border-gray-200 pt-2 text-[8px] text-gray-400 font-bold uppercase tracking-widest mt-3">
+              <span>Gerado em {new Date(currentApr.createdAt || new Date()).toLocaleDateString('pt-BR')}</span>
+              <span>Página {pageIdx + 1} de {pages.length}</span>
+            </div>
+          </div>
+        ))}
       </div>
     );
   }
@@ -2536,10 +3494,10 @@ export default function App() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              className="space-y-8"
+            className="space-y-3 lg:space-y-4"
             >
               {/* Quick Access */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button 
                   onClick={() => {
                     setCurrentApr({
@@ -2561,7 +3519,7 @@ export default function App() {
                     setIsReadOnly(false);
                     setView('edit');
                   }}
-                  className="flex items-center gap-4 p-6 bg-yellow-500 text-white rounded-2xl shadow-sm hover:bg-yellow-600 transition-all group"
+                  className="flex items-center gap-4 p-3 lg:p-4 bg-yellow-500 text-white rounded-2xl shadow-sm hover:bg-yellow-600 transition-all group"
                 >
                   <div className="bg-white/20 p-3 rounded-xl group-hover:scale-110 transition-transform">
                     <Plus className="w-6 h-6" />
@@ -2574,7 +3532,7 @@ export default function App() {
 
                 <button 
                   onClick={() => setShowInstallGuide(true)}
-                  className="flex items-center gap-4 p-6 bg-white border border-yellow-200 rounded-2xl shadow-sm hover:bg-yellow-50 transition-all group"
+                  className="flex items-center gap-4 p-3 lg:p-4 bg-white border border-yellow-200 rounded-2xl shadow-sm hover:bg-yellow-50 transition-all group"
                 >
                   <div className="bg-yellow-100 p-3 rounded-xl text-yellow-600 group-hover:scale-110 transition-transform">
                     <Smartphone className="w-6 h-6" />
@@ -2587,37 +3545,37 @@ export default function App() {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-blue-50 p-3 rounded-xl">
-                      <FileText className="text-blue-600 w-6 h-6" />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-white p-3 lg:p-4 rounded-2xl border border-gray-100 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-blue-50 p-2.5 rounded-xl">
+                      <FileText className="text-blue-600 w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Total de APRs</p>
-                      <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total de APRs</p>
+                      <p className="text-xl font-black text-gray-900">{stats.total}</p>
                     </div>
                   </div>
                 </div>
-                <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-green-50 p-3 rounded-xl">
-                      <Users className="text-green-600 w-6 h-6" />
+                <div className="bg-white p-3 lg:p-4 rounded-2xl border border-gray-100 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-green-50 p-2.5 rounded-xl">
+                      <Users className="text-green-600 w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Funcionários</p>
-                      <p className="text-2xl font-bold text-gray-900">{stats.employees}</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Funcionários</p>
+                      <p className="text-xl font-black text-gray-900">{stats.employees}</p>
                     </div>
                   </div>
                 </div>
-                <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
-                  <div className="flex items-center gap-4">
-                    <div className="bg-orange-50 p-3 rounded-xl">
-                      <Clock className="text-orange-600 w-6 h-6" />
+                <div className="bg-white p-3 lg:p-4 rounded-2xl border border-gray-100 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-orange-50 p-2.5 rounded-xl">
+                      <Clock className="text-orange-600 w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-500 uppercase tracking-wider">Recentes (7 dias)</p>
-                      <p className="text-2xl font-bold text-gray-900">{stats.recent}</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Recentes (7 dias)</p>
+                      <p className="text-xl font-black text-gray-900">{stats.recent}</p>
                     </div>
                   </div>
                 </div>
@@ -2625,30 +3583,101 @@ export default function App() {
 
               {/* Search and List */}
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="p-6 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <h2 className="text-lg font-bold text-gray-900">Histórico de Análises</h2>
-                  <div className="flex flex-col sm:flex-row items-center gap-3">
-                    <div className="relative w-full sm:w-48">
-                      <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                <div className="p-4 border-b border-gray-100 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <h2 className="text-lg font-bold text-gray-900">Histórico de Análises</h2>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Monthly Report export button if filtering by specific month */}
+                      {(dateFilterType === 'specific-month' && selectedMonth !== 'all') && (
+                        <button 
+                          onClick={() => handleExportMonthlyAPRReport(selectedMonth)}
+                          className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-95 whitespace-nowrap animate-fadeIn"
+                        >
+                          <Download size={14} /> Relatório {getMonthName(selectedMonth, { month: 'short', year: 'numeric' })}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Filters and Search Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-3 items-center">
+                    {/* Date Filter Type Selector */}
+                    <div className="relative col-span-1 md:col-span-3">
+                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
                       <select 
-                        value={selectedMonth}
-                        onChange={(e) => setSelectedMonth(e.target.value)}
-                        className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full appearance-none cursor-pointer"
+                        value={dateFilterType}
+                        onChange={(e) => {
+                          setDateFilterType(e.target.value);
+                          // Reset other related states on type switch for safety
+                          if (e.target.value !== 'specific-month') setSelectedMonth('all');
+                          if (e.target.value !== 'custom-range') {
+                            setSelectedStartDate('');
+                            setSelectedEndDate('');
+                          }
+                        }}
+                        className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full appearance-none cursor-pointer"
                       >
-                        <option value="all">Todos os Meses</option>
-                        {Array.from(new Set((aprs || []).map(a => (a.date || '').substring(0, 7)))).filter(Boolean).sort().reverse().map(month => (
-                          <option key={month} value={month}>
-                            {getMonthName(month)}
-                          </option>
-                        ))}
+                        <option value="all">📅 Todos os Períodos</option>
+                        <option value="today">📅 Hoje</option>
+                        <option value="yesterday">📅 Ontem</option>
+                        <option value="7days">📅 Últimos 7 dias</option>
+                        <option value="30days">📅 Últimos 30 dias</option>
+                        <option value="this-month">📅 Este Mês</option>
+                        <option value="specific-month">📅 Mês Específico...</option>
+                        <option value="custom-range">📅 Período Customizado...</option>
                       </select>
                     </div>
-                    <div className="relative w-full sm:w-48">
+
+                    {/* Conditional Sub-filters for Dates */}
+                    {dateFilterType === 'specific-month' && (
+                      <div className="relative col-span-1 md:col-span-3">
+                        <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                        <select 
+                          value={selectedMonth}
+                          onChange={(e) => setSelectedMonth(e.target.value)}
+                          className="pl-9 pr-4 py-2 bg-yellow-50/50 border border-yellow-200 rounded-xl text-sm font-semibold text-yellow-800 focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full appearance-none cursor-pointer"
+                        >
+                          <option value="all">Escolha o Mês...</option>
+                          {Array.from(new Set((aprs || []).map(a => (a.date || '').substring(0, 7)))).filter(Boolean).sort().reverse().map(month => (
+                            <option key={month} value={month}>
+                              {getMonthName(month)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {dateFilterType === 'custom-range' && (
+                      <div className="col-span-1 md:col-span-4 flex items-center gap-1.5">
+                        <div className="relative flex-1">
+                          <span className="absolute left-2.5 top-1 text-[8px] font-bold text-gray-400 uppercase tracking-wider">De:</span>
+                          <input 
+                            type="date"
+                            value={selectedStartDate}
+                            onChange={(e) => setSelectedStartDate(e.target.value)}
+                            className="pl-2.5 pr-2 pt-4 pb-1 bg-yellow-50/30 border border-yellow-100 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full"
+                          />
+                        </div>
+                        <span className="text-gray-400 font-bold text-xs">à</span>
+                        <div className="relative flex-1">
+                          <span className="absolute left-2.5 top-1 text-[8px] font-bold text-gray-400 uppercase tracking-wider">Até:</span>
+                          <input 
+                            type="date"
+                            value={selectedEndDate}
+                            onChange={(e) => setSelectedEndDate(e.target.value)}
+                            className="pl-2.5 pr-2 pt-4 pb-1 bg-yellow-50/30 border border-yellow-100 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Cargo/Role Selector */}
+                    <div className="relative col-span-1 md:col-span-2">
                       <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
                       <select 
                         value={selectedRole}
                         onChange={(e) => setSelectedRole(e.target.value)}
-                        className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full appearance-none cursor-pointer"
+                        className="pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full appearance-none cursor-pointer"
                       >
                         <option value="all">Todos os Cargos</option>
                         {Array.from(new Set((employees || []).map(e => e.role))).filter(Boolean).sort().map(role => (
@@ -2656,82 +3685,76 @@ export default function App() {
                         ))}
                       </select>
                     </div>
-                    <div className="relative w-full sm:w-64">
+
+                    {/* Search Input */}
+                    <div className="relative col-span-1 md:col-span-3 ml-auto w-full">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
                       <input 
                         type="text" 
                         placeholder="Buscar por empresa, tarefa..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full"
+                        className="pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all w-full font-medium"
                       />
                     </div>
-                    {selectedMonth !== 'all' && (
-                      <button 
-                        onClick={() => handleExportMonthlyAPRReport(selectedMonth)}
-                        className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-95 whitespace-nowrap"
-                      >
-                        <Download size={16} /> Relatório Mensal
-                      </button>
-                    )}
                   </div>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
+                <div className="overflow-x-auto no-scrollbar">
+                  <table className="w-full text-left table-fixed">
                     <thead>
                       <tr className="bg-gray-50/50">
-                        <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Tarefa / Empresa</th>
-                        <th className="hidden md:table-cell px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Data / Local</th>
-                        <th className="hidden lg:table-cell px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Riscos / Fotos</th>
-                        <th className="hidden xl:table-cell px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Executantes</th>
-                        <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Ações</th>
+                        <th className="w-[35%] px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Tarefa / Empresa</th>
+                        <th className="hidden md:table-cell w-[20%] px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Data / Local</th>
+                        <th className="hidden lg:table-cell w-[13%] px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Riscos / Fotos</th>
+                        <th className="hidden xl:table-cell w-[12%] px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest">Executantes</th>
+                        <th className="w-64 px-4 py-3 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Ações</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {filteredAprs.map((apr) => (
                         <tr key={apr.id} className="hover:bg-gray-50/50 transition-colors group">
-                          <td className="px-6 py-4">
-                            <div className="font-bold text-gray-900 truncate max-w-[120px] sm:max-w-none"><span>{apr.task || 'Sem título'}</span></div>
-                            <div className="text-sm text-gray-500 truncate max-w-[120px] sm:max-w-none"><span>{apr.company || 'Empresa não informada'}</span></div>
+                          <td className="px-4 py-1.5" title={apr.task}>
+                            <div className="font-black text-gray-900 truncate text-sm"><span>{apr.task || 'Sem título'}</span></div>
+                            <div className="text-xs text-gray-500 truncate mt-0.5"><span>{apr.company || 'Empresa não informada'}</span></div>
                             <div className="md:hidden mt-1 flex items-center gap-2 text-[10px] text-gray-400">
                               <span>{formatDateForDisplay(apr.date)}</span>
                               <span>•</span>
                               <span><span>{apr.location || 'Local'}</span></span>
                             </div>
                           </td>
-                          <td className="hidden md:table-cell px-6 py-4">
-                            <div className="flex items-center gap-1.5 text-sm text-gray-700">
-                              <Calendar size={14} className="text-gray-400" />
+                          <td className="hidden md:table-cell px-4 py-1.5">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-gray-700">
+                              <Calendar size={12} className="text-gray-400" />
                               {formatDateForDisplay(apr.date)}
                             </div>
-                            <div className="flex items-center gap-1.5 text-sm text-gray-500">
-                              <MapPin size={14} className="text-gray-400" />
+                            <div className="flex items-center gap-1.5 text-xs text-gray-500 mt-0.5">
+                              <MapPin size={12} className="text-gray-400" />
                               {apr.location || 'Local não informado'}
                             </div>
                           </td>
-                          <td className="hidden lg:table-cell px-6 py-4">
+                          <td className="hidden lg:table-cell px-4 py-1.5">
                             <div className="flex flex-col gap-1">
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 w-fit">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-gray-100 text-gray-800 w-fit uppercase">
                                 {(apr.risks || []).length} riscos
                               </span>
-                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-800 w-fit">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black bg-blue-50 text-blue-800 w-fit uppercase">
                                 {(apr.photos || []).length} fotos
                               </span>
                             </div>
                           </td>
-                          <td className="hidden xl:table-cell px-6 py-4">
-                            <div className="flex -space-x-2 overflow-hidden">
+                          <td className="hidden xl:table-cell px-4 py-1.5">
+                            <div className="flex -space-x-1.5 overflow-hidden">
                               {(apr.executors || []).map((e, i) => (
-                                <div key={e.id} className="inline-block h-8 w-8 rounded-full ring-2 ring-white bg-gray-200 flex items-center justify-center text-[10px] font-bold text-gray-600" title={e.name}>
+                                <div key={`${e.id || 'exec'}-${i}`} className="inline-block h-6 w-6 rounded-full ring-2 ring-white bg-gray-200 flex items-center justify-center text-[10px] font-black text-gray-600" title={e.name}>
                                   {e.name?.charAt(0)}
                                 </div>
                               ))}
-                              {(apr.executors || []).length === 0 && <span className="text-xs text-gray-400 italic">Nenhum</span>}
+                              {(apr.executors || []).length === 0 && <span className="text-[10px] text-gray-400 italic">Nenhum</span>}
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex items-center justify-end gap-1 sm:gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                          <td className="px-4 py-1.5 text-right">
+                            <div className="flex items-center justify-end gap-1 sm:gap-1.5 transition-opacity">
                               <button 
                                 onClick={() => {
                                   setCurrentApr(apr);
@@ -2753,6 +3776,13 @@ export default function App() {
                                 title="Editar"
                               >
                                 <Edit2 size={18} />
+                              </button>
+                              <button 
+                                onClick={() => handleDuplicateApr(apr)}
+                                className="p-2 text-cyan-600 hover:bg-cyan-50 rounded-lg transition-colors"
+                                title="Duplicar"
+                              >
+                                <Copy size={18} />
                               </button>
                               <button 
                                 onClick={() => handlePrint(apr)}
@@ -2794,6 +3824,36 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Limit Selector and Pagination Controls */}
+                <div className="p-4 border-t border-gray-100 flex flex-col sm:flex-row items-center justify-between gap-4 bg-gray-50/50">
+                  <p className="text-xs text-gray-500 font-medium">
+                    Exibindo até <strong className="text-gray-900">{aprsLimit}</strong> APRs mais recentes (atualmente <strong className="text-gray-900">{aprs.length}</strong> carregadas).
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 font-bold uppercase tracking-wider">Limite:</span>
+                    <select
+                      value={aprsLimit}
+                      onChange={(e) => setAprsLimit(Number(e.target.value))}
+                      className="px-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 transition-all cursor-pointer"
+                    >
+                      <option value={50}>50 APRs</option>
+                      <option value={100}>100 APRs</option>
+                      <option value={200}>200 APRs</option>
+                      <option value={500}>500 APRs</option>
+                      <option value={1000}>1000 APRs</option>
+                      <option value={5000}>Sem limite (5000)</option>
+                    </select>
+                    {aprs.length >= aprsLimit && (
+                      <button
+                        onClick={() => setAprsLimit(prev => prev + 100)}
+                        className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs font-bold rounded-xl shadow-sm transition-all active:scale-95 whitespace-nowrap"
+                      >
+                        Carregar Mais +100
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </motion.div>
           ) : view === 'statistics' ? (
@@ -2822,10 +3882,10 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="max-w-4xl mx-auto space-y-8"
             >
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-6">
                 {/* Add/Edit Form (Replaced with Quick Add Style) */}
                 <div className="md:col-span-1 space-y-6">
-                  <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm space-y-4">
+                  <div className="bg-white p-4 lg:p-5 rounded-2xl border border-gray-200 shadow-sm space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {editingEmployeeId ? <Edit2 size={18} className="text-yellow-500" /> : <UserPlus size={18} className="text-yellow-500" />}
@@ -2908,6 +3968,78 @@ export default function App() {
                           </motion.div>
                         )}
                       </AnimatePresence>
+                    </div>
+                  </div>
+
+                  {/* Export / Import Section for Worker List & Signatures */}
+                  <div className="bg-white p-4 lg:p-5 rounded-2xl border border-gray-200 shadow-sm space-y-4">
+                    <div className="flex items-center gap-2 text-gray-900">
+                      <Users size={18} className="text-yellow-600" />
+                      <h3 className="font-bold text-sm">Backup e Integração</h3>
+                    </div>
+                    <p className="text-[11px] text-gray-500 leading-relaxed">
+                      Exporte ou importe a lista de funcionários com as suas respectivas assinaturas digitais para outros dispositivos ou aplicativos compatíveis usando o formato JSON.
+                    </p>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={handleExportEmployeesJson}
+                        className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border border-yellow-200/50 rounded-xl text-xs font-bold transition-all"
+                        title="Baixar arquivo JSON"
+                      >
+                        <Download size={14} />
+                        Baixar JSON
+                      </button>
+                      <button
+                        onClick={handleCopyEmployeesJson}
+                        className={`flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all border ${
+                          copiedEmployees 
+                            ? 'bg-green-500 border-green-600 text-white' 
+                            : 'bg-gray-50 hover:bg-gray-100 border-gray-200 text-gray-700'
+                        }`}
+                        title="Copiar dados JSON"
+                      >
+                        {copiedEmployees ? <Check size={14} /> : <Copy size={14} />}
+                        {copiedEmployees ? 'Copiado!' : 'Copiar JSON'}
+                      </button>
+                    </div>
+
+                    <div className="pt-2 border-t border-gray-100">
+                      <button
+                        onClick={() => {
+                          setShowImportArea(!showImportArea);
+                          setImportError(null);
+                          setImportSuccess(null);
+                        }}
+                        className="w-full text-center py-2 text-xs font-semibold text-gray-500 hover:text-gray-700 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors border border-gray-100"
+                      >
+                        {showImportArea ? 'Ocultar Área de Importação' : 'Importar de outro App / Backup'}
+                      </button>
+
+                      {showImportArea && (
+                        <div className="mt-3 space-y-3">
+                          <textarea
+                            value={importJsonInput}
+                            onChange={(e) => setImportJsonInput(e.target.value)}
+                            placeholder="Cole aqui o conteúdo do JSON exportado..."
+                            className="w-full h-24 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-mono focus:outline-none focus:ring-2 focus:ring-yellow-500/20 focus:border-yellow-500 placeholder:font-sans"
+                          />
+                          <button
+                            onClick={handleImportEmployeesJson}
+                            disabled={!importJsonInput.trim()}
+                            className="w-full bg-yellow-500 hover:bg-yellow-600 border border-yellow-600 disabled:opacity-50 text-white py-2 rounded-xl text-xs font-bold transition-all shadow-sm"
+                          >
+                            Confirmar Importação
+                          </button>
+
+                          {importError && (
+                            <p className="text-[11px] text-red-600 font-medium bg-red-50 p-2 rounded-lg border border-red-100">{importError}</p>
+                          )}
+                          {importSuccess && (
+                            <p className="text-[11px] text-green-600 font-medium bg-green-50 p-2 rounded-lg border border-green-100">{importSuccess}</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -3213,7 +4345,7 @@ export default function App() {
 
                   <div className="space-y-4">
                     {(currentApr?.executors || []).map((executor, index) => (
-                      <div key={executor.id || index} className="bg-white border border-gray-200 rounded-2xl p-6 space-y-4 shadow-sm relative group">
+                      <div key={`${executor.id || 'exec'}-${index}`} className="bg-white border border-gray-200 rounded-2xl p-6 space-y-4 shadow-sm relative group">
                         <div className="flex items-center justify-between">
                           <h4 className="text-sm font-bold text-gray-900">Funcionário {index + 1}</h4>
                           {!isReadOnly && (
@@ -3379,7 +4511,7 @@ export default function App() {
                                     <button 
                                       key={i}
                                       onClick={() => {
-                                        addRisk(risk.description, risk.measures);
+                                        addRisk(risk.description, risk.measures, risk.classification);
                                         setShowCommonRisks(false);
                                       }}
                                       className="w-full text-left p-3 hover:bg-yellow-50 rounded-xl text-sm transition-colors border-b border-gray-50 last:border-0 group/item"
@@ -3410,11 +4542,70 @@ export default function App() {
                       <div className="flex justify-between items-start gap-4">
                         <div className="flex-1 space-y-6">
                           <div className="space-y-2">
-                            <div className="flex items-center gap-2">
-                              <div className="bg-yellow-100 p-1.5 rounded-lg">
-                                <AlertTriangle size={18} className="text-yellow-600" />
+                            <div className="flex items-center justify-between flex-wrap gap-2 border-b border-gray-50 pb-2">
+                              <div className="flex items-center gap-2">
+                                <div className="bg-yellow-100 p-1.5 rounded-lg">
+                                  <AlertTriangle size={18} className="text-yellow-600" />
+                                </div>
+                                <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Risco Identificado</label>
                               </div>
-                              <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Risco Identificado</label>
+                              {isReadOnly ? (
+                                <div className={`px-3 py-1 rounded-full text-[10px] font-extrabold tracking-wide uppercase border ${
+                                  risk.classification === 'Baixo'
+                                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                    : risk.classification === 'Alto'
+                                    ? 'bg-rose-50 border-rose-200 text-rose-700'
+                                    : 'bg-amber-50 border-amber-200 text-amber-700'
+                                }`}>
+                                  Classificação: {risk.classification || 'Médio'}
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1.5 bg-gray-50 p-1 rounded-xl border border-gray-100">
+                                  <span className="text-[9px] uppercase font-bold text-gray-400 px-1">Classificação:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const newRisks = (currentApr.risks || []).map(r => r.id === risk.id ? { ...r, classification: 'Baixo' as const } : r);
+                                      setCurrentApr({ ...currentApr, risks: newRisks });
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                                      (risk.classification || 'Médio') === 'Baixo'
+                                        ? 'bg-emerald-500 text-white shadow-sm scale-105'
+                                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    Baixo
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const newRisks = (currentApr.risks || []).map(r => r.id === risk.id ? { ...r, classification: 'Médio' as const } : r);
+                                      setCurrentApr({ ...currentApr, risks: newRisks });
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                                      (risk.classification || 'Médio') === 'Médio'
+                                        ? 'bg-amber-500 text-white shadow-sm scale-105'
+                                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    Médio
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const newRisks = (currentApr.risks || []).map(r => r.id === risk.id ? { ...r, classification: 'Alto' as const } : r);
+                                      setCurrentApr({ ...currentApr, risks: newRisks });
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                                      (risk.classification || 'Médio') === 'Alto'
+                                        ? 'bg-rose-500 text-white shadow-sm scale-105'
+                                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                                    }`}
+                                  >
+                                    Alto
+                                  </button>
+                                </div>
+                              )}
                             </div>
                             <input 
                               type="text" 

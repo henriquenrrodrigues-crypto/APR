@@ -2,6 +2,7 @@ export interface Risk {
   id: string;
   description: string;
   measures: string[];
+  classification?: 'Baixo' | 'Médio' | 'Alto';
 }
 
 export interface Employee {
