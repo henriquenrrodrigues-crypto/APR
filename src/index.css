@@ -253,7 +253,7 @@
 /* Global fallback to prevent oklab/oklch leakage in computed styles */
 
 html, body {
-  background-color: #ffffff;
+  background-color: #1a2233;
   color: #111827;
   color-scheme: light !important;
 }
